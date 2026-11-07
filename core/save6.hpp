@@ -1,38 +1,13 @@
-// Spielstand der 6. Generation (Datei „main“ von XY und ORAS).
-//
-// Aufbau (nach PKHeX, an echten Spielständen noch zu bestätigen):
-// - Die letzten 0x200 Byte sind die Blocktabelle mit Kennung 0x42454546 („BEEF“).
-//   Danach je Block 8 Byte: Länge (u32), Kennung (u16), CRC16 (u16).
+// Spielstand der 6. Generation (Datei „main“ von XY und ORAS). An echten Spielständen bestätigt.
+// - Die letzten 0x200 Byte sind die Blocktabelle mit Kennung 0x42454546 („BEEF“),
+//   danach je Block 8 Byte: Länge (u32), Kennung (u16), CRC16-CCITT (u16).
 // - Blöcke liegen hintereinander ab 0, jeweils auf 0x200 aufgerundet.
 #pragma once
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <vector>
-
-#include "pk6.hpp"
+#include "savefile.hpp"
 
 namespace pw3d {
 
 enum class Game6 { Unknown, XY, ORAS };
-
-const char* gameName(Game6 g);
-
-struct Block6 {
-    uint32_t offset = 0;
-    uint32_t length = 0;
-    uint16_t id = 0;
-    uint16_t storedCrc = 0;
-    uint16_t computedCrc = 0;
-    bool ok() const { return storedCrc == computedCrc; }
-};
-
-struct Trainer6 {
-    uint16_t tid = 0;
-    uint16_t sid = 0;
-    uint8_t gender = 0;
-    std::string name;
-};
 
 struct Layout6 {
     uint32_t size;
@@ -44,48 +19,39 @@ struct Layout6 {
     uint32_t dexLang;   // Sprachbits relativ zu dex (7 je Art)
 };
 
-class Save6 {
+class Save6 : public SaveFile {
 public:
-    // Erkennt das Spiel an der Dateigröße und liest die Blocktabelle. Fehlertext in err.
+    static bool knownSize(size_t n) { return n == 0x65600 || n == 0x76000; }
     bool load(std::vector<uint8_t> data, std::string& err);
 
     Game6 game() const { return game_; }
-    const Layout6& layout() const { return layout_; }
-    const std::vector<Block6>& blocks() const { return blocks_; }
-    bool checksumsValid() const;
-    void updateChecksums();
+    int generation() const override { return 6; }
+    const char* gameTitle() const override;
+    uint16_t maxSpecies() const override { return 721; }
 
-    Trainer6 trainer() const;
-    void setTrainer(const Trainer6& t);
+    bool valid() const override;
+    void finalize() override;
+    const std::vector<Block6>& blocks() const override { return blocks_; }
 
-    int partyCount() const;
-    PK6 partySlot(int i) const;
-    void setPartySlot(int i, PK6 pk);
+    Trainer6 trainer() const override;
+    void setTrainer(const Trainer6& t) override;
 
-    static constexpr int BOX_SLOTS = 30;
-    int boxCount() const { return int(layout_.boxCount); }
-    bool boxSlotEmpty(int box, int slot) const;
-    PK6 boxSlot(int box, int slot) const;
-    void setBoxSlot(int box, int slot, PK6 pk);
+    int partyCount() const override;
+    void setPartyCount(int n) override;
+    PK6 partySlot(int i) const override;
+    void setPartySlot(int i, PK6 pk) override;
 
-    // Pokédex: trägt das Pokémon als gesehen und gefangen ein (Geschlecht, Schillerfarbe, Sprache).
-    // Formen werden noch nicht eingetragen.
-    void registerDex(const PK6& pk);
-    bool dexCaught(uint16_t species) const;
+    int boxCount() const override { return int(layout_.boxCount); }
+    PK6 boxSlot(int box, int slot) const override;
+    void setBoxSlot(int box, int slot, PK6 pk) override;
 
-    // Setzt den Trainer des Spielstands auf t. Alle Pokémon (Team und Boxen), deren Originaltrainer
-    // der bisherige Trainer ist, bekommen ebenfalls t als Originaltrainer. Gibt deren Anzahl zurück.
-    int adoptTrainer(const Trainer6& t);
-
-    std::vector<uint8_t>& raw() { return data_; }
-    const std::vector<uint8_t>& raw() const { return data_; }
+    void registerDex(const PK6& pk) override;
 
 private:
-    bool readBlockTable(std::string& err);
     uint32_t boxOffset(int box, int slot) const;
 
-    std::vector<uint8_t> data_;
     std::vector<Block6> blocks_;
+    uint32_t tableAt_ = 0;
     Game6 game_ = Game6::Unknown;
     Layout6 layout_{};
 };

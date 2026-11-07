@@ -1,65 +1,62 @@
 // Spielstand der 7. Generation (Datei „main“ von Sonne/Mond und Ultrasonne/Ultramond).
 //
-// Gleiche Blocktabelle wie Gen 6 (Kennung BEEF, 8 Byte je Block, 0x200-Ausrichtung), aber
-// gespiegeltes und invertiertes CRC16. Block 0x24 enthält ab +0x100 eine 0x80-Byte-Signatur
-// (MemeCrypto); seine CRC wird mit genullter Signatur berechnet.
-// Pokémon-Datensätze haben dieselbe Größe und Verschlüsselung wie in Gen 6.
+// Gleiche Blocktabelle wie Gen 6, aber gespiegeltes und invertiertes CRC16. Block 0x24 enthält
+// ab +0x100 eine 0x80-Byte-Signatur (siehe memecrypto.hpp); seine CRC wird mit genullter
+// Signatur berechnet. Pokémon-Datensätze haben dieselbe Größe und Verschlüsselung wie in Gen 6.
 #pragma once
-#include <cstdint>
-#include <string>
-#include <vector>
-
-#include "pk6.hpp"
-#include "save6.hpp" // Block6, Trainer6
+#include "savefile.hpp"
 
 namespace pw3d {
 
 enum class Game7 { Unknown, SM, USUM };
 
-const char* gameName(Game7 g);
-
-constexpr uint16_t GEN7_MAX_SPECIES = 807;
-
 struct Layout7 {
     uint32_t size;
-    uint32_t trainer; // MyStatus: TID, SID, Spiel, Geschlecht, … Name bei +0x38
+    uint32_t trainer; // MyStatus: TID, SID, Spiel +4, Geschlecht +5, Sprache +0x35, Name +0x38
     uint32_t party;
     uint32_t box;
     uint32_t boxCount;
     uint32_t money;
+    uint32_t dex;
 };
 
-class Save7 {
+class Save7 : public SaveFile {
 public:
     bool load(std::vector<uint8_t> data, std::string& err);
 
     Game7 game() const { return game_; }
-    const std::vector<Block6>& blocks() const { return blocks_; }
-    bool checksumsValid() const;
-    void updateChecksums();
+    int generation() const override { return 7; }
+    const char* gameTitle() const override;
+    uint16_t maxSpecies() const override { return 807; }
 
-    Trainer6 trainer() const;
+    bool valid() const override; // Prüfsummen und Signatur
+    bool checksumsValid() const;
+    bool signatureValid() const;
+    void finalize() override;    // Prüfsummen, danach Signatur
+    const std::vector<Block6>& blocks() const override { return blocks_; }
+
+    Trainer6 trainer() const override;
+    void setTrainer(const Trainer6& t) override;
     uint32_t money() const;
     void setMoney(uint32_t v);
 
-    int partyCount() const;
-    PK6 partySlot(int i) const;
+    int partyCount() const override;
+    void setPartyCount(int n) override;
+    PK6 partySlot(int i) const override;
+    void setPartySlot(int i, PK6 pk) override;
 
-    static constexpr int BOX_SLOTS = 30;
-    int boxCount() const { return int(layout_.boxCount); }
-    bool boxSlotEmpty(int box, int slot) const;
-    PK6 boxSlot(int box, int slot) const;
+    int boxCount() const override { return int(layout_.boxCount); }
+    PK6 boxSlot(int box, int slot) const override;
+    void setBoxSlot(int box, int slot, PK6 pk) override;
 
-    std::vector<uint8_t>& raw() { return data_; }
-    const std::vector<uint8_t>& raw() const { return data_; }
+    void registerDex(const PK6& pk) override;
 
 private:
     uint16_t blockCrc(const Block6& b) const;
     uint32_t boxOffset(int box, int slot) const;
 
-    std::vector<uint8_t> data_;
     std::vector<Block6> blocks_;
-    uint32_t tableAt_ = 0; // erster Tabelleneintrag
+    uint32_t tableAt_ = 0;
     Game7 game_ = Game7::Unknown;
     Layout7 layout_{};
 };

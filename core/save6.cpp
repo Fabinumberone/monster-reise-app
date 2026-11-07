@@ -9,7 +9,7 @@ namespace {
 
 constexpr uint32_t BEEF = 0x42454546;
 
-// An echten Spielständen bestätigt (Box-Offset ORAS noch offen).
+// An echten Spielständen bestätigt (Box-Offset ORAS noch ohne Box-Pokémon geprüft).
 constexpr Layout6 LAYOUT_XY{0x65600, 0x14000, 0x14200, 0x22600, 31, 0x15000, 0x3C8};
 constexpr Layout6 LAYOUT_ORAS{0x76000, 0x14000, 0x14200, 0x33000, 31, 0x15000, 0x400};
 
@@ -20,7 +20,6 @@ constexpr uint32_t DEX_DISPLAYED = 0x1E8; // gleiche 4 Abschnitte: welche Varian
 constexpr uint32_t DEX_SECTION = 0x60;
 constexpr uint32_t DEX_FOREIGN_XY = 0x64C; // XY: Arten bis 649 aus Spielen vor XY
 
-// Sprache im Datensatz -> Index der Sprachbits.
 int langIndex(uint8_t lang) {
     switch (lang) {
     case 1: return 0; case 2: return 1; case 3: return 2; case 4: return 3;
@@ -29,10 +28,13 @@ int langIndex(uint8_t lang) {
     }
 }
 
+void setBit(uint8_t* base, uint32_t bit) { base[bit >> 3] |= uint8_t(1u << (bit & 7)); }
+bool getBit(const uint8_t* base, uint32_t bit) { return (base[bit >> 3] >> (bit & 7)) & 1; }
+
 } // namespace
 
-const char* gameName(Game6 g) {
-    switch (g) {
+const char* Save6::gameTitle() const {
+    switch (game_) {
     case Game6::XY: return "X/Y";
     case Game6::ORAS: return "Omega Rubin/Alpha Saphir";
     default: return "unbekannt";
@@ -43,25 +45,18 @@ bool Save6::load(std::vector<uint8_t> data, std::string& err) {
     data_ = std::move(data);
     if (data_.size() == LAYOUT_XY.size) { game_ = Game6::XY; layout_ = LAYOUT_XY; }
     else if (data_.size() == LAYOUT_ORAS.size) { game_ = Game6::ORAS; layout_ = LAYOUT_ORAS; }
-    else {
-        err = "Unbekannte Größe " + std::to_string(data_.size()) + " Byte (erwartet 0x65600 für XY oder 0x76000 für ORAS)";
-        return false;
-    }
-    return readBlockTable(err);
-}
+    else { err = "Kein Gen-6-Spielstand"; return false; }
 
-bool Save6::readBlockTable(std::string& err) {
-    blocks_.clear();
     const uint32_t footer = uint32_t(data_.size()) - 0x200;
-    // Kennung im Fußbereich suchen, statt eine feste Position anzunehmen.
     uint32_t magicAt = 0;
-    for (uint32_t p = footer; p + 4 <= data_.size(); p += 4) {
+    for (uint32_t p = footer; p + 4 <= data_.size(); p += 4)
         if (rd32(&data_[p]) == BEEF) { magicAt = p; break; }
-    }
     if (!magicAt) { err = "Blocktabelle nicht gefunden (Kennung BEEF fehlt)"; return false; }
+    tableAt_ = magicAt + 4;
 
+    blocks_.clear();
     uint32_t offset = 0;
-    for (uint32_t p = magicAt + 4; p + 8 <= data_.size(); p += 8) {
+    for (uint32_t p = tableAt_; p + 8 <= data_.size(); p += 8) {
         Block6 b;
         b.length = rd32(&data_[p]);
         b.id = rd16(&data_[p + 4]);
@@ -78,23 +73,19 @@ bool Save6::readBlockTable(std::string& err) {
     return true;
 }
 
-bool Save6::checksumsValid() const {
+bool Save6::valid() const {
     for (auto& b : blocks_)
         if (!b.ok()) return false;
     return true;
 }
 
-void Save6::updateChecksums() {
-    // Die Tabelle liegt im letzten Block und enthält die Prüfsummen der anderen,
-    // daher zuerst alle anderen Einträge schreiben, dann den eigenen.
-    uint32_t magicAt = 0;
-    for (uint32_t p = uint32_t(data_.size()) - 0x200; p + 4 <= data_.size(); p += 4)
-        if (rd32(&data_[p]) == BEEF) { magicAt = p; break; }
+void Save6::finalize() {
+    // Die Tabelle liegt im letzten Block; dessen CRC zuletzt, nachdem die anderen eingetragen sind.
     for (size_t i = 0; i < blocks_.size(); i++) {
         auto& b = blocks_[i];
         b.computedCrc = crc16Ccitt(&data_[b.offset], b.length);
         b.storedCrc = b.computedCrc;
-        wr16(&data_[magicAt + 4 + i * 8 + 6], b.storedCrc);
+        wr16(&data_[tableAt_ + i * 8 + 6], b.storedCrc);
     }
 }
 
@@ -117,38 +108,19 @@ void Save6::setTrainer(const Trainer6& t) {
 }
 
 int Save6::partyCount() const { return data_[layout_.party + 6 * PK6_PARTY_SIZE]; }
-
+void Save6::setPartyCount(int n) { data_[layout_.party + 6 * PK6_PARTY_SIZE] = uint8_t(n); }
 PK6 Save6::partySlot(int i) const { return PK6::decrypt(&data_[layout_.party + i * PK6_PARTY_SIZE], PK6_PARTY_SIZE); }
-
 void Save6::setPartySlot(int i, PK6 pk) { pk.encrypt(&data_[layout_.party + i * PK6_PARTY_SIZE], PK6_PARTY_SIZE); }
 
 uint32_t Save6::boxOffset(int box, int slot) const {
     return layout_.box + uint32_t(box * BOX_SLOTS + slot) * PK6_BOX_SIZE;
 }
-
-// Leere Plätze sind im Spiel verschlüsselte Leerdatensätze (Art 0), nicht nur Nullen.
-bool Save6::boxSlotEmpty(int box, int slot) const {
-    const uint8_t* p = &data_[boxOffset(box, slot)];
-    return isEmptySlot(p, PK6_BOX_SIZE) || PK6::decrypt(p, PK6_BOX_SIZE).species() == 0;
-}
-
 PK6 Save6::boxSlot(int box, int slot) const { return PK6::decrypt(&data_[boxOffset(box, slot)], PK6_BOX_SIZE); }
-
 void Save6::setBoxSlot(int box, int slot, PK6 pk) { pk.encrypt(&data_[boxOffset(box, slot)], PK6_BOX_SIZE); }
-
-namespace {
-void setBit(uint8_t* base, uint32_t bit) { base[bit >> 3] |= uint8_t(1u << (bit & 7)); }
-bool getBit(const uint8_t* base, uint32_t bit) { return (base[bit >> 3] >> (bit & 7)) & 1; }
-} // namespace
-
-bool Save6::dexCaught(uint16_t species) const {
-    const uint8_t* dex = &data_[layout_.dex];
-    return getBit(dex + DEX_CAUGHT, species - 1u) || (game_ == Game6::XY && getBit(dex + DEX_FOREIGN_XY, species - 1u));
-}
 
 void Save6::registerDex(const PK6& pk) {
     uint16_t sp = pk.species();
-    if (sp == 0 || sp > GEN6_MAX_SPECIES || pk.isEgg()) return;
+    if (sp == 0 || sp > maxSpecies() || pk.isEgg()) return;
     uint8_t* dex = &data_[layout_.dex];
     uint32_t bit = sp - 1u;
 
@@ -165,30 +137,6 @@ void Save6::registerDex(const PK6& pk) {
 
     int li = langIndex(pk.language());
     if (li >= 0) setBit(dex + layout_.dexLang, bit * 7 + uint32_t(li));
-}
-
-int Save6::adoptTrainer(const Trainer6& t) {
-    Trainer6 old = trainer();
-    auto isOld = [&](const PK6& pk) { return pk.tid() == old.tid && pk.sid() == old.sid && pk.otName() == old.name; };
-    auto reown = [&](PK6& pk) { pk.setTid(t.tid); pk.setSid(t.sid); pk.setOtName(t.name); };
-    int n = 0;
-    for (int i = 0; i < partyCount() && i < 6; i++) {
-        PK6 pk = partySlot(i);
-        if (pk.looksValid() && isOld(pk)) { reown(pk); setPartySlot(i, pk); n++; }
-    }
-    for (int b = 0; b < boxCount(); b++)
-        for (int s = 0; s < BOX_SLOTS; s++) {
-            if (boxSlotEmpty(b, s)) continue;
-            PK6 pk = boxSlot(b, s);
-            if (pk.looksValid() && isOld(pk)) { reown(pk); setBoxSlot(b, s, pk); n++; }
-        }
-    Trainer6 nt = old;
-    nt.tid = t.tid;
-    nt.sid = t.sid;
-    nt.name = t.name;
-    nt.gender = t.gender;
-    setTrainer(nt);
-    return n;
 }
 
 } // namespace pw3d
