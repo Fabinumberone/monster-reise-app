@@ -257,7 +257,7 @@ bool launchTitle(u64 tid, FS_MediaType media) {
 }
 
 constexpr u64 MGBA = 0x00040000001A1E00ULL;               // mGBA (CIA), Nutzer 2026-11-07
-constexpr u64 TWILIGHT = 0x0004801554574C4DULL;           // TWiLight Menu++ (Annahme, noch zu bestätigen)
+constexpr u64 TWILIGHT = 0x0004800453524C41ULL;           // TWiLight Menu++ (CIA „TWLMENUPP“, NAND), Nutzer 2026-11-07
 
 // DS-Forwarder (nds-bootstrap) haben die Title-ID 00048004 + Spielcode in ASCII,
 // z. B. HeartGold deutsch „IPKD“ = 49504B44 (vom Nutzer bestätigt: HG, Platin).
