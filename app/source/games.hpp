@@ -61,4 +61,7 @@ bool writeSave(const SaveSlot& s, const std::vector<u8>& data, std::string& err)
 
 // Startet das Spiel: mit Home-Menü beim Beenden der App (Chainloader), ohne Home-Menü
 // (Azahar) sofort per Anwendungssprung. false, wenn der Sprung abgelehnt wurde.
+// Gen 3 startet mGBA, Gen 4/5 den Forwarder des Spiels (falls installiert), sonst TWiLight Menu++.
 bool launchGame(const SaveSlot& s);
+// Programm, in dem man Gen-3–5-Spiele selbst auswählt („mGBA“, „TWiLight Menu++“), sonst nullptr.
+const char* launcherName(const SaveSlot& s);

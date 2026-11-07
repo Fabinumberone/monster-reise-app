@@ -229,20 +229,71 @@ bool writeSave(const SaveSlot& s, const std::vector<u8>& data, std::string& err)
     return true;
 }
 
-bool launchGame(const SaveSlot& s) {
-    if (isFileGame(*s.game)) return false; // mGBA bzw. TWiLight Menu++ startet man selbst
-    u64 tid = (u64(HIGH_ID) << 32) | s.game->lowId;
+namespace {
+
+// Ist der Titel installiert? (am:u; false, wenn der Dienst nicht verfügbar ist)
+bool titleInstalled(u64 tid, FS_MediaType m) {
+    if (R_FAILED(amInit())) return false;
+    AM_TitleEntry info;
+    bool ok = R_SUCCEEDED(AM_GetTitleInfo(m, 1, &tid, &info));
+    amExit();
+    return ok;
+}
+
+bool launchTitle(u64 tid, FS_MediaType media) {
     // Läuft das Home-Menü (echte Konsole), springt libctru beim Beenden über den Chainloader.
     // Ohne Home-Menü (Azahar startet die App direkt) nähme libctru einen Luma3DS-Umweg, der im
     // Emulator nicht existiert. Dann lösen wir den Sprung selbst aus; Azahar startet das Spiel
     // in diesem Fall per „RebootToTitle“.
     bool homeMenu = false;
     if (R_SUCCEEDED(APT_IsRegistered(aptGetMenuAppID(), &homeMenu)) && homeMenu) {
-        aptSetChainloader(tid, s.media);
+        aptSetChainloader(tid, media);
         return true;
     }
     static u8 param[0x300] = {};
     static u8 hmac[0x20] = {};
-    if (R_FAILED(APT_PrepareToDoApplicationJump(0, tid, s.media))) return false;
+    if (R_FAILED(APT_PrepareToDoApplicationJump(0, tid, media))) return false;
     return R_SUCCEEDED(APT_DoApplicationJump(param, sizeof param, hmac));
+}
+
+constexpr u64 MGBA = 0x00040000001A1E00ULL;               // mGBA (CIA), Nutzer 2026-11-07
+constexpr u64 TWILIGHT = 0x0004801554574C4DULL;           // TWiLight Menu++ (Annahme, noch zu bestätigen)
+
+// DS-Forwarder (nds-bootstrap) haben die Title-ID 00048004 + Spielcode in ASCII,
+// z. B. HeartGold deutsch „IPKD“ = 49504B44 (vom Nutzer bestätigt: HG, Platin).
+const char* dsGameCode(u8 version) {
+    switch (version) {
+    case 10: return "ADAD"; // Diamant
+    case 11: return "APAD"; // Perl
+    case 12: return "CPUD"; // Platin
+    case 7: return "IPKD";  // HeartGold
+    case 8: return "IPGD";  // SoulSilver
+    case 20: return "IRAD"; // Weiß
+    case 21: return "IRBD"; // Schwarz
+    case 22: return "IRDD"; // Weiß 2
+    case 23: return "IRED"; // Schwarz 2
+    default: return nullptr;
+    }
+}
+
+} // namespace
+
+const char* launcherName(const SaveSlot& s) {
+    if (s.game->gen == 3) return "mGBA";
+    if (s.game->gen == 4 || s.game->gen == 5) return "TWiLight Menu++";
+    return nullptr;
+}
+
+bool launchGame(const SaveSlot& s) {
+    if (s.game->gen == 3) return titleInstalled(MGBA, MEDIATYPE_SD) && launchTitle(MGBA, MEDIATYPE_SD);
+    if (s.game->gen == 4 || s.game->gen == 5) {
+        if (const char* c = dsGameCode(s.game->gbVersion)) {
+            u64 tid = (0x00048004ULL << 32) | (u64(u8(c[0])) << 24) | (u64(u8(c[1])) << 16) | (u64(u8(c[2])) << 8) | u8(c[3]);
+            if (titleInstalled(tid, MEDIATYPE_NAND)) return launchTitle(tid, MEDIATYPE_NAND);
+        }
+        if (titleInstalled(TWILIGHT, MEDIATYPE_NAND)) return launchTitle(TWILIGHT, MEDIATYPE_NAND);
+        if (titleInstalled(TWILIGHT, MEDIATYPE_SD)) return launchTitle(TWILIGHT, MEDIATYPE_SD);
+        return false;
+    }
+    return launchTitle((u64(HIGH_ID) << 32) | s.game->lowId, s.media);
 }

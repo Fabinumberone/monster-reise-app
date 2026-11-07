@@ -139,6 +139,7 @@ AccessControlInfo:
    - APT:U
    - ac:u
    - am:net
+   - am:u
    - cfg:u
    - fs:USER
    - gsp::Gpu

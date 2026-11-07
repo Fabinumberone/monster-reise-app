@@ -755,7 +755,7 @@ void drawBottom(const State& st) {
         text("Alle Spielstände sind auf dem gleichen Stand.", 160, both ? 130 : 104, 0.42f, C_LIGHT, CENTER, 300);
         text("Nach dem Spielen: speichern, Spiel beenden, App öffnen.", 160, both ? 146 : 120, 0.42f, C_LIGHT, CENTER, 300);
     }
-        button(B_YES, isFileGame(*st.target->game) ? "Fertig (A)" : "Starten (A)", C_OK, C_WHITE, 0.55f);
+        button(B_YES, "Starten (A)", C_OK, C_WHITE, 0.55f);
         button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.55f);
         break;
     case Screen::Busy: {
@@ -825,9 +825,9 @@ void doLaunch(State& st) {
         return;
     }
     st.current = st.target;
-    st.message = st.target->game->gen == 3   ? "Alles aktuell\nStarte jetzt mGBA und lade\n" + st.target->label() + "."
-                 : isFileGame(*st.target->game) ? "Alles aktuell\nStarte jetzt TWiLight Menu++ und lade\n" + st.target->label() + "."
-                 : std::string("Spiel konnte nicht gestartet werden\nBitte starte ") + st.target->label() + " selbst.";
+    st.message = launcherName(*st.target)
+                     ? std::string("Alles aktuell\nStarte jetzt ") + launcherName(*st.target) + " und lade\n" + gameTitle(*st.target->game) + "."
+                     : std::string("Spiel konnte nicht gestartet werden\nBitte starte ") + st.target->label() + " selbst.";
     st.screen = Screen::Error;
 }
 
