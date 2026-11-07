@@ -29,5 +29,6 @@ bool hasSave(const Game& g);
 bool readSave(const Game& g, std::vector<u8>& out, std::string& err);
 bool writeSave(const Game& g, const std::vector<u8>& data, std::string& err);
 
-// Startet das Spiel, sobald die App beendet wird.
-void launchOnExit(const Game& g);
+// Startet das Spiel: mit Home-Menü beim Beenden der App (Chainloader), ohne Home-Menü
+// (Azahar) sofort per Anwendungssprung. false, wenn der Sprung abgelehnt wurde.
+bool launchGame(const Game& g);

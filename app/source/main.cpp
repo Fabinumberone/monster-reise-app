@@ -354,8 +354,13 @@ void input(State& st, u32 down) {
         break;
     case Screen::Done:
         if (down & KEY_A) {
-            launchOnExit(*st.target);
-            st.quit = true;
+            if (launchGame(*st.target)) {
+                st.quit = true;
+            } else {
+                st.message = std::string(ERR) + "Spiel konnte nicht gestartet werden." + RST +
+                             "\n\nDie Reise ist trotzdem erledigt.\nBitte starte " + st.target->name + " selbst.";
+                st.screen = Screen::Error;
+            }
         }
         break;
     case Screen::Error:

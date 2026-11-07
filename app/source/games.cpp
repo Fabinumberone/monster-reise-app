@@ -120,8 +120,19 @@ bool writeSave(const Game& g, const std::vector<u8>& data, std::string& err) {
     return true;
 }
 
-void launchOnExit(const Game& g) {
+bool launchGame(const Game& g) {
     u64 tid = (u64(HIGH_ID) << 32) | g.lowId;
-    // Auf der Konsole: SD-Installation; in Azahar gibt es nur diese.
-    aptSetChainloader(tid, MEDIATYPE_SD);
+    // Läuft das Home-Menü (echte Konsole), springt libctru beim Beenden über den Chainloader.
+    // Ohne Home-Menü (Azahar startet die App direkt) nähme libctru einen Luma3DS-Umweg, der im
+    // Emulator nicht existiert. Dann lösen wir den Sprung selbst aus; Azahar startet das Spiel
+    // in diesem Fall per „RebootToTitle“.
+    bool homeMenu = false;
+    if (R_SUCCEEDED(APT_IsRegistered(aptGetMenuAppID(), &homeMenu)) && homeMenu) {
+        aptSetChainloader(tid, MEDIATYPE_SD);
+        return true;
+    }
+    static u8 param[0x300] = {};
+    static u8 hmac[0x20] = {};
+    if (R_FAILED(APT_PrepareToDoApplicationJump(0, tid, MEDIATYPE_SD))) return false;
+    return R_SUCCEEDED(APT_DoApplicationJump(param, sizeof param, hmac));
 }
