@@ -1,71 +1,88 @@
-// Erzeugt icons.bin (PC-Symbole aller Pokémon) für die Reise-App aus dem eigenen Ultramond-Dump.
-// Nicht mitgeliefert, nicht committet, liegt nur auf der SD.
-//   node tools/gen-icons.mjs [romfs-ordner] [ausgabe]
-//   Standard: extracted/um/romfs -> %APPDATA%\Azahar\sdmc\pokemon-world-3d\icons.bin
+// Erzeugt icons.bin (PC-Symbole aller Pokémon) für die Reise-App aus dem eigenen Ultramond- oder
+// Ultrasonne-Dump. Nicht mitgeliefert, nicht committet, liegt nur auf der SD.
+//   node tools/gen-icons.mjs [dump-ordner] [ausgabe]
+//   Standard: extracted/um -> %APPDATA%\Azahar\sdmc\pokemon-world-3d\icons.bin
 //
-// Quelle: a/0/6/2 (1154 BFLIM, 64×32, RGBA5551, um 90° gedreht gespeichert). Eintrag 0 ist ein
-// Platzhalter, danach Arten in Pokédex-Reihenfolge, jeweils mit ihren Symbolvarianten direkt
-// hintereinander. Anzahl je Art: siehe iconCounts() (Formen aus Personal a/0/1/7 bzw. Modelltabelle
-// a/0/9/4 ohne weibliche Modelle, plus bekannte Abweichungen).
+// Bilder: romfs a/0/6/2 (1154 BFLIM, LZ11, 64×32 RGBA5551, um 90° gedreht gespeichert).
+// Zuordnung: Tabelle im Programmcode (exefs/code.bin, geladen ab 0x100000), 16 Byte je Art:
+//   u16 Symbol (männlich/normal), u16 Symbol (weiblich), u32 Zeiger Formenliste m, u32 Zeiger
+//   Formenliste w, u16 Formen m, u16 Formen w. Formenlisten sind u16-Arrays mit dem Symbol je Form.
+// Die Tabelle wird über die bekannte Folge der ersten Symbole (1, 2, 3, 5, 6, 7, 10 …) gefunden.
 //
-// Ausgabe (siehe app/source/icons.hpp): "PW3DICON", u32 1, u16 Arten, u16 Symbole,
-// u16 Start[Arten+1], u8 Anzahl[Arten+1], je Symbol 4096 Byte (aufrecht, PICA-Kacheln).
+// Ausgabe (siehe app/source/icons.hpp), Version 2:
+//   "PW3DICON", u32 2, u16 Arten, u16 Symbole, u32 Offset[Arten+1] (relativ zum Tabellenbereich),
+//   Tabellenbereich: je Art u8 Formen, u8 0, dann Formen × (u16 m, u16 w),
+//   danach je Symbol 4096 Byte (aufrecht, PICA-Kacheln, Symbol bei x 12–52, y 0–30).
 import fs from 'node:fs';
 import path from 'node:path';
 import { readGarc, lz11 } from './lib/garc.mjs';
 import { decodeRgba5551, encodeRgba5551, rotateCCW } from './lib/pica.mjs';
 
 const root = path.join(import.meta.dirname, '..');
-const romfs = process.argv[2] ?? path.join(root, 'extracted', 'um', 'romfs');
+const dump = process.argv[2] ?? path.join(root, 'extracted', 'um');
 const out = process.argv[3] ?? path.join(process.env.APPDATA, 'Azahar', 'sdmc', 'pokemon-world-3d', 'icons.bin');
-const SPECIES = 807;
+const SPECIES = 807, CODE_BASE = 0x100000;
 
-const icons = readGarc(path.join(romfs, 'a', '0', '6', '2'));
-const pers = readGarc(path.join(romfs, 'a', '0', '1', '7'));
+const icons = readGarc(path.join(dump, 'romfs', 'a', '0', '6', '2'));
+const code = fs.readFileSync(path.join(dump, 'exefs', 'code.bin'));
 
-// Modelltabelle: Eintrag 0 von a/0/9/4, je Art 4 Byte (u16 Start, u8 Anzahl, u8 Flags; Bit 2 = weibliches Modell)
-function modelTable() {
-  const f = path.join(romfs, 'a', '0', '9', '4'), fd = fs.openSync(f, 'r'), head = Buffer.alloc(0x40000);
-  fs.readSync(fd, head, 0, head.length, 0);
-  const hs = head.readUInt32LE(4), dataOff = head.readUInt32LE(0x10), fato = head.readUInt32LE(hs + 4), fatb = hs + fato + 12;
-  const q = fatb + head.readUInt32LE(hs + 12), st = head.readUInt32LE(q + 4), en = head.readUInt32LE(q + 8);
-  const mt = Buffer.alloc(en - st);
-  fs.readSync(fd, mt, 0, mt.length, dataOff + st);
-  fs.closeSync(fd);
-  return mt;
-}
-
-// Bekannte Abweichungen (Art: Anzahl Symbole), von Hand an den Bildern geprüft.
-const OVERRIDES = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'icon-overrides.json'), 'utf8'));
-
-function iconCounts() {
-  const mt = modelTable(), counts = [0];
-  for (let s = 1; s <= SPECIES; s++) {
-    const o = (s - 1) * 4, female = (mt[o + 3] & 2) !== 0, models = mt[o + 2] - (female ? 1 : 0);
-    counts[s] = OVERRIDES[s] ?? Math.max(models, pers[s][0][0x20]);
+// Tabelle suchen: Eintrag für Art 1 beginnt mit 1, Art 2 mit 2, Art 3 mit 3, Art 4 mit 5 …
+function findTable() {
+  const seq = [1, 2, 3, 5, 6, 7, 10, 11, 12, 14];
+  for (let i = 0; i + 16 * seq.length <= code.length; i += 2) {
+    if (seq.every((v, k) => code.readUInt16LE(i + k * 16) === v)) return i - 16; // Art 0 davor
   }
-  return counts;
+  throw new Error('Symboltabelle im Programmcode nicht gefunden – ist das ein USUM-Dump?');
 }
+const table = findTable();
+const list = (ptr, n) => Array.from({ length: n }, (_, k) => code.readUInt16LE(ptr - CODE_BASE + k * 2));
 
-const counts = iconCounts();
-const start = [0];
-let i = 1;
-for (let s = 1; s <= SPECIES; s++) { start[s] = i; i += counts[s]; }
-if (i !== icons.length) console.warn(`WARNUNG: Zuordnung ergibt ${i} Symbole, Archiv hat ${icons.length}. Ab der ersten Abweichung sind die Symbole verschoben.`);
+const entries = [];
+for (let s = 0; s <= SPECIES; s++) {
+  const o = table + s * 16;
+  const m = code.readUInt16LE(o), w = code.readUInt16LE(o + 2);
+  const mp = code.readUInt32LE(o + 4), fp = code.readUInt32LE(o + 8);
+  const mn = code.readUInt16LE(o + 12), fn = code.readUInt16LE(o + 14);
+  const ml = mp ? list(mp, mn) : [], fl = fp ? list(fp, fn) : [];
+  const n = Math.max(1, ml.length, fl.length);
+  const forms = [];
+  for (let f = 0; f < n; f++) {
+    const male = ml.length ? ml[Math.min(f, ml.length - 1)] : m;
+    const female = fl.length ? fl[Math.min(f, fl.length - 1)] : ml.length ? male : w;
+    forms.push([male, female]);
+  }
+  entries.push(forms);
+}
+const check = entries[25][0][0] === 34 && entries[26][0][0] === 45 && entries[807][0][0] < icons.length;
+if (!check) throw new Error('Symboltabelle unplausibel');
 
-const header = Buffer.alloc(16 + (SPECIES + 1) * 3);
+const tabParts = [], offsets = [];
+let pos = 0;
+for (const forms of entries) {
+  offsets.push(pos);
+  const b = Buffer.alloc(2 + forms.length * 4);
+  b[0] = forms.length;
+  forms.forEach(([mm, ww], k) => { b.writeUInt16LE(mm, 2 + k * 4); b.writeUInt16LE(ww, 4 + k * 4); });
+  tabParts.push(b);
+  pos += b.length;
+}
+const header = Buffer.alloc(16 + (SPECIES + 1) * 4);
 header.write('PW3DICON', 0, 'latin1');
-header.writeUInt32LE(1, 8);
+header.writeUInt32LE(2, 8);
 header.writeUInt16LE(SPECIES, 12);
 header.writeUInt16LE(icons.length, 14);
-for (let s = 0; s <= SPECIES; s++) { header.writeUInt16LE(start[s], 16 + s * 2); header[16 + (SPECIES + 1) * 2 + s] = counts[s]; }
-const parts = [header];
-for (const e of icons) {
+offsets.forEach((v, s) => header.writeUInt32LE(v, 16 + s * 4));
+const tab = Buffer.concat(tabParts);
+const pad = Buffer.alloc((4 - (tab.length % 4)) % 4);
+
+const pics = icons.map(e => {
   let d = e[0];
   if (d[0] === 0x11) d = lz11(d);
-  const upright = rotateCCW(decodeRgba5551(d, 32, 64), 32, 64); // 64×32, aufrecht
-  parts.push(encodeRgba5551(upright, 64, 32));
-}
+  return encodeRgba5551(rotateCCW(decodeRgba5551(d, 32, 64), 32, 64), 64, 32);
+});
+const lenField = Buffer.alloc(4);
+lenField.writeUInt32LE(tab.length + pad.length);
 fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, Buffer.concat(parts));
-console.log(`${icons.length} Symbole -> ${out}`);
+fs.writeFileSync(out, Buffer.concat([header, lenField, tab, pad, ...pics]));
+console.log(`Symboltabelle bei code.bin 0x${table.toString(16)}; ${icons.length} Symbole -> ${out}`);
+console.log('Stichprobe:', [[25, 0], [26, 1], [201, 5], [678, 1]].map(([s, f]) => `${s}/${f}=${entries[s][Math.min(f, entries[s].length - 1)].join('|')}`).join(' '));

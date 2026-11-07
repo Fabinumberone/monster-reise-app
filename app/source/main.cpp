@@ -89,7 +89,7 @@ void frame(float x, float y, float w, float h, u32 c, float t = 2) {
 
 // Symbol des Pokémon (oder Platzhalterkreis), grau getönt, wenn hier nicht sichtbar.
 void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
-    const C2D_Image* img = pk.isEgg() ? nullptr : g_icons.get(pk.species(), pk.form());
+    const C2D_Image* img = pk.isEgg() ? nullptr : g_icons.get(pk.species(), pk.form(), pk.gender());
     if (img) {
         C2D_ImageTint tint;
         C2D_PlainImageTint(&tint, C2D_Color32(0x40, 0x40, 0x40, 0xFF), dim ? 0.6f : 0.0f);
