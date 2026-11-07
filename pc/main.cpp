@@ -15,6 +15,7 @@
 #include "../core/gbaconvert.hpp"
 #include "../core/gbconvert.hpp"
 #include "../core/gen3tables.hpp"
+#include "../core/nds.hpp"
 #include "../core/species.hpp"
 #include "../core/items.hpp"
 #include "../core/names.hpp"
@@ -569,6 +570,56 @@ static void printGBItems(const char* title, const std::vector<GBItem>& items, in
     std::printf("\n");
 }
 
+// ---------- Gen 4/5 ----------
+static int cmdInfoNDS(const std::string& path) {
+    std::vector<uint8_t> data;
+    std::string err;
+    SaveNDS s;
+    if (!readFile(path, data) || !s.load(std::move(data), err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    std::printf("Spiel: %s (Gen %d), Prüfsummen %s\n", ndsGameName(s.game()), s.generation(), s.checksumsValid() ? "ok" : "FALSCH");
+    std::printf("Trainer: \"%s\"  TID %05u  SID %05u  Geschlecht %u  Sprache %u  Geld %u\n", s.trainerName().c_str(), s.tid(),
+                s.sid(), s.trainerGender(), s.language(), unsigned(s.money()));
+    auto line = [&](const char* lbl, const PK45& pk) {
+        uint16_t sp = pk.species();
+        uint8_t level = pk.party ? pk.partyLevel() : levelForExp(g_species.get(sp).growth, pk.exp());
+        std::printf("  %-8s Nr. %3u %s  \"%s\"  OT \"%s\" %05u/%05u  Lv. %u  EP %u  PID %08X  Wesen %u  Form %u%s%s%s\n", lbl, sp,
+                    g_names.species(sp).c_str(), pk.nickname().c_str(), pk.otName().c_str(), pk.tid(), pk.sid(), level,
+                    unsigned(pk.exp()), unsigned(pk.pid()), pk.nature(), pk.form(), pk.isEgg() ? "  Ei" : "",
+                    pk.isNicknamed() ? "  Spitzname" : "", pk.checksum() == pk.calcChecksum() ? "" : "  PRÜFSUMME FALSCH");
+        std::printf("           Attacken:");
+        for (uint16_t m : pk.moves())
+            if (m) std::printf(" %s,", g_names.move(m).c_str());
+        std::printf("  Item: %s  Ball %u  Herkunft %u  Sprache %u  Fähigkeit %u\n", pk.heldItem() ? g_names.item(pk.heldItem()).c_str() : "-",
+                    pk.ball(), pk.version(), pk.language(), pk.ability());
+    };
+    auto party = s.party();
+    std::printf("\nTeam (%zu):\n", party.size());
+    for (size_t i = 0; i < party.size(); i++) {
+        char l[8];
+        std::snprintf(l, sizeof l, "#%zu", i + 1);
+        line(l, party[i]);
+    }
+    std::printf("\nBoxen:\n");
+    int n = 0;
+    for (int b = 0; b < s.boxCount(); b++)
+        for (int i = 0; i < SaveNDS::SLOTS; i++) {
+            PK45 pk = s.boxSlot(b, i);
+            if (!pk.species()) continue;
+            char l[12];
+            std::snprintf(l, sizeof l, "B%02d/%02d", b + 1, i + 1);
+            if (++n <= 40) line(l, pk);
+        }
+    if (n > 40) std::printf("  … insgesamt %d Pokémon in den Boxen\n", n);
+    const char* names[] = {"Items", "Basis-Items", "TM/VM", "Briefe", "Medizin", "Beeren", "Bälle", "Kampf-Items"};
+    for (int p = 0; p < 8; p++) {
+        if (!s.hasPouch(SaveNDS::Pouch(p))) continue;
+        std::printf("%s:", names[p]);
+        for (const NDSItem& it : s.pouch(SaveNDS::Pouch(p))) std::printf(" %s×%u", g_names.item(it.id).c_str(), it.count);
+        std::printf("\n");
+    }
+    return 0;
+}
+
 // ---------- Gen 3 ----------
 static int cmdInfoGBA(const std::string& path) {
     std::vector<uint8_t> data;
@@ -667,6 +718,7 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> probe;
         if (readFile(argv[2], probe) && (probe.size() == 0x8000 || probe.size() == 0x8010)) return cmdInfoGB(argv[2]);
         if (probe.size() >= 0x20000 && probe.size() <= 0x20100) return cmdInfoGBA(argv[2]);
+        if (probe.size() >= 0x80000 && probe.size() <= 0x80100) return cmdInfoNDS(argv[2]);
         auto s = open(argv[2], false);
         return s ? cmdInfo(*s, false) : 1;
     }
