@@ -82,10 +82,17 @@ function flipV(px, w, h) {
   for (let y = 0; y < h; y++) px.copy(out, (h - 1 - y) * w * 4, y * w * 4, (y + 1) * w * 4);
   return out;
 }
+// Horizontal spiegeln, damit die Pokémon wie im PC der Spiele nach links schauen (Wunsch des Nutzers).
+// Der Symbolbereich x 12–51 bleibt dabei an derselben Stelle (x -> 63 − x).
+function flipH(px, w, h) {
+  const out = Buffer.alloc(px.length);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) px.copy(out, (y * w + (w - 1 - x)) * 4, (y * w + x) * 4, (y * w + x) * 4 + 4);
+  return out;
+}
 const pics = icons.map(e => {
   let d = e[0];
   if (d[0] === 0x11) d = lz11(d);
-  return encodeRgba5551(flipV(rotateCCW(decodeRgba5551(d, 32, 64), 32, 64), 64, 32), 64, 32);
+  return encodeRgba5551(flipV(flipH(rotateCCW(decodeRgba5551(d, 32, 64), 32, 64), 64, 32), 64, 32), 64, 32);
 });
 const lenField = Buffer.alloc(4);
 lenField.writeUInt32LE(tab.length + pad.length);
