@@ -1,11 +1,14 @@
-// Pokémon World 3DS – Reise-App
-// Oben: Trainer, Region und die gewählte Ansicht (Team, PC, Beutel). Unten: Menü.
-// Steuerung: Steuerkreuz wählen, A bestätigen, B zurück, L/R Box wechseln, START beenden.
+// Pokémon World 3DS – Reise-App mit grafischer Oberfläche (citro2d, Systemschrift).
+// Oben: Kopf mit Trainer und Region, darunter Team, PC oder Beutel.
+// Unten: Touch-Menü, Regionswahl und Reiseablauf.
+// Tasten: Steuerkreuz bewegt die Auswahl oben (PC/Beutel), L/R wechselt die Box,
+//         Y wechselt die Ansicht, X öffnet „Reisen“, A/B bestätigen/abbrechen, START beendet.
 #include <3ds.h>
+#include <citro2d.h>
 
 #include <sys/stat.h>
 
-#include <cstdarg>
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 #include <memory>
@@ -13,7 +16,9 @@
 #include <vector>
 
 #include "bank.hpp"
+#include "bytes.hpp"
 #include "games.hpp"
+#include "icons.hpp"
 #include "items.hpp"
 #include "names.hpp"
 #include "savefile.hpp"
@@ -26,73 +31,93 @@ const char* DIR = "sdmc:/pokemon-world-3d";
 const char* BANK = "sdmc:/pokemon-world-3d/speicher.bin";
 const char* LAST = "sdmc:/pokemon-world-3d/zuletzt.txt";
 const char* BACKUPS = "sdmc:/pokemon-world-3d/sicherungen";
-
 const char* NAMES = "sdmc:/pokemon-world-3d/namen.txt";
+const char* ICONS = "sdmc:/pokemon-world-3d/icons.bin";
 
-PrintConsole topCon, botCon;
+// ---------- Farben ----------
+const u32 C_BG = C2D_Color32(0x1E, 0x2A, 0x3A, 0xFF);
+const u32 C_BG2 = C2D_Color32(0x27, 0x37, 0x4B, 0xFF);
+const u32 C_HEAD = C2D_Color32(0x2E, 0x86, 0xAB, 0xFF);
+const u32 C_CARD = C2D_Color32(0xF4, 0xF1, 0xEA, 0xFF);
+const u32 C_CARD_DIM = C2D_Color32(0x8A, 0x92, 0x9C, 0xFF);
+const u32 C_TEXT = C2D_Color32(0x22, 0x22, 0x22, 0xFF);
+const u32 C_MUTED = C2D_Color32(0x6B, 0x72, 0x7B, 0xFF);
+const u32 C_WHITE = C2D_Color32(0xFF, 0xFF, 0xFF, 0xFF);
+const u32 C_LIGHT = C2D_Color32(0xB9, 0xC6, 0xD3, 0xFF);
+const u32 C_SEL = C2D_Color32(0xFF, 0xC8, 0x3D, 0xFF);
+const u32 C_OK = C2D_Color32(0x3F, 0xB5, 0x5A, 0xFF);
+const u32 C_ERR = C2D_Color32(0xD9, 0x4A, 0x3A, 0xFF);
+const u32 C_MALE = C2D_Color32(0x3B, 0x6F, 0xD9, 0xFF);
+const u32 C_FEMALE = C2D_Color32(0xD9, 0x4A, 0x7A, 0xFF);
+
+u32 regionColor(const char* region) {
+    std::string r = region;
+    if (r == "Hoenn") return C2D_Color32(0xD9, 0x4A, 0x3A, 0xFF);
+    if (r == "Kalos") return C2D_Color32(0x3B, 0x6F, 0xD9, 0xFF);
+    return C2D_Color32(0xE0, 0xA8, 0x22, 0xFF); // Alola
+}
+
+// ---------- Zeichnen ----------
+C2D_TextBuf g_buf;
 Names g_names;
+IconSet g_icons;
 
-// ---------- Text: UTF-8 -> Zeichensatz der Konsole (CP437) ----------
-std::string cp437(const std::string& s) {
-    std::string o;
-    for (size_t i = 0; i < s.size();) {
-        unsigned char c = s[i];
-        if (c < 0x80) { o += char(c); i++; continue; }
-        unsigned cp = 0;
-        int len = (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 1;
-        if (len == 2 && i + 1 < s.size()) cp = ((c & 0x1F) << 6) | (s[i + 1] & 0x3F);
-        else if (len == 3 && i + 2 < s.size()) cp = ((c & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F);
-        i += len;
-        switch (cp) {
-        case 0xE4: o += char(0x84); break; // ä
-        case 0xF6: o += char(0x94); break; // ö
-        case 0xFC: o += char(0x81); break; // ü
-        case 0xC4: o += char(0x8E); break; // Ä
-        case 0xD6: o += char(0x99); break; // Ö
-        case 0xDC: o += char(0x9A); break; // Ü
-        case 0xDF: o += char(0xE1); break; // ß
-        case 0xE9: o += char(0x82); break; // é
-        case 0xD7: o += 'x'; break;        // ×
-        case 0x2192: o += char(0x1A); break; // →
-        case 0x2642: o += char(0x0B); break; // ♂
-        case 0x2640: o += char(0x0C); break; // ♀
-        default: o += '?';
-        }
+enum Align { LEFT = C2D_AlignLeft, CENTER = C2D_AlignCenter, RIGHT = C2D_AlignRight };
+
+// Text zeichnen; wird bei maxW > 0 horizontal gestaucht, damit er passt.
+void text(const std::string& s, float x, float y, float size, u32 color, Align a = LEFT, float maxW = 0) {
+    C2D_Text t;
+    C2D_TextParse(&t, g_buf, s.c_str());
+    C2D_TextOptimize(&t);
+    float sx = size;
+    if (maxW > 0) {
+        float w, h;
+        C2D_TextGetDimensions(&t, size, size, &w, &h);
+        if (w > maxW) sx = size * maxW / w;
     }
-    return o;
+    C2D_DrawText(&t, C2D_WithColor | a, x, y, 0.5f, sx, size, color);
 }
 
-void say(const char* fmt, ...) {
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    std::vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    std::fputs(cp437(buf).c_str(), stdout);
+void rect(float x, float y, float w, float h, u32 c) { C2D_DrawRectSolid(x, y, 0.5f, w, h, c); }
+
+void frame(float x, float y, float w, float h, u32 c, float t = 2) {
+    rect(x, y, w, t, c);
+    rect(x, y + h - t, w, t, c);
+    rect(x, y, t, h, c);
+    rect(x + w - t, y, t, h, c);
 }
 
-const char* HL = "\x1b[33m";  // gelb
-const char* DIM = "\x1b[90m"; // grau
-const char* OK = "\x1b[32m";  // grün
-const char* ERR = "\x1b[31m"; // rot
-const char* RST = "\x1b[0m";
+// Symbol des Pokémon (oder Platzhalterkreis), grau getönt, wenn hier nicht sichtbar.
+void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
+    const C2D_Image* img = pk.isEgg() ? nullptr : g_icons.get(pk.species(), pk.form());
+    if (img) {
+        C2D_ImageTint tint;
+        C2D_PlainImageTint(&tint, C2D_Color32(0x40, 0x40, 0x40, 0xFF), dim ? 0.6f : 0.0f);
+        C2D_DrawImageAt(*img, x, y, 0.5f, &tint, scale, scale);
+    } else {
+        float r = 12 * scale;
+        C2D_DrawCircleSolid(x + 20 * scale, y + 15 * scale, 0.5f, r, dim ? C_CARD_DIM : C2D_Color32(0xD9, 0x4A, 0x3A, 0xFF));
+        C2D_DrawCircleSolid(x + 20 * scale, y + 15 * scale, 0.5f, r * 0.35f, C_WHITE);
+    }
+}
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Travel, Confirm, Done, Error };
+enum class Screen { Menu, Travel, Confirm, Busy, Done, Error };
 enum class View { Team, PC, Bag };
 
 struct State {
     Bank bank;
     bool bankOk = false;
     std::string bankErr;
-    std::vector<const Game*> installed; // Spiele mit Spielstand
-    const Game* current = nullptr;      // Spiel, in dem man sich befindet
+    std::vector<const Game*> installed;
+    const Game* current = nullptr;
+    const Game* target = nullptr;
     Screen screen = Screen::Menu;
     View view = View::Team;
-    int menuSel = 0, travelSel = 0, box = 0;
-    const Game* target = nullptr;
+    int box = 0, cursor = 0, bagScroll = 0;
+    std::vector<std::string> steps;
     std::string message;
-    bool quit = false, dirty = true;
+    bool quit = false;
 };
 
 u32 readLast() {
@@ -113,6 +138,7 @@ void writeLast(u32 lowId) {
 
 void loadState(State& st) {
     g_names.load(NAMES);
+    g_icons.load(ICONS);
     st.installed.clear();
     for (auto& g : allGames())
         if (hasSave(g)) st.installed.push_back(&g);
@@ -126,152 +152,260 @@ void loadState(State& st) {
             if (st.bank.current == kindName(g->kind)) { st.current = g; break; }
 }
 
-// ---------- Ansichten (oberer Bildschirm) ----------
-// Mit Leerzeichen auf width Zeichen auffüllen (Zeichen, nicht UTF-8-Bytes).
-std::string pad(const std::string& s, size_t width) {
-    size_t chars = 0;
-    for (unsigned char c : s) chars += (c & 0xC0) != 0x80;
-    return chars >= width ? s : s + std::string(width - chars, ' ');
-}
-
-// Auf höchstens width Zeichen kürzen.
-std::string cut(const std::string& s, size_t width) {
-    size_t chars = 0;
-    for (size_t i = 0; i < s.size(); i++) {
-        if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80 && chars++ == width) return s.substr(0, i);
-    }
-    return s;
-}
+GameKind here(const State& st) { return st.current ? st.current->kind : GameKind::USUM; }
 
 std::string monName(const PK6& pk) {
     if (pk.isEgg()) return "Ei";
     std::string art = g_names.species(pk.species());
     std::string nick = pk.nickname();
-    if (pk.isNicknamed() && !nick.empty() && nick != art) return nick + " (" + art + ")";
+    if (pk.isNicknamed() && !nick.empty() && nick != art) return nick;
     return art;
 }
 
-std::string monLine(const BankEntry& e, GameKind here) {
-    const PK6& pk = e.pk;
-    std::string s = pad(monName(pk), 26);
-    char buf[32];
-    if (pk.partyLevel()) { std::snprintf(buf, sizeof buf, "Lv.%3u", pk.partyLevel()); s += buf; } // nur im Team
-    if (!pk.isEgg()) s += pk.gender() == 0 ? " ♂" : pk.gender() == 1 ? " ♀" : "  ";
-    if (pk.isShiny()) s += " *";
-    if (!fitsIn(pk, here)) s += std::string("\n     ") + DIM + "(hier nicht sichtbar)" + RST;
+std::string money(u32 v) { // 99999 -> 99.999
+    std::string s = std::to_string(v);
+    for (int i = int(s.size()) - 3; i > 0; i -= 3) s.insert(size_t(i), ".");
     return s;
 }
 
-std::string moveLine(const PK6& pk) {
-    std::string s;
-    for (uint16_t m : pk.moves())
-        if (m) s += (s.empty() ? "" : ", ") + g_names.move(m);
-    return s;
+// ---------- Oberer Bildschirm ----------
+void drawHeader(const State& st) {
+    rect(0, 0, 400, 26, C_HEAD);
+    text("Pokémon World 3DS", 8, 4, 0.6f, C_WHITE);
+    if (st.current) {
+        u32 rc = regionColor(st.current->region);
+        std::string r = std::string(st.current->region) + " · " + st.current->name;
+        rect(250, 4, 144, 18, rc);
+        text(r, 322, 5, 0.45f, C_WHITE, CENTER, 136);
+    }
+    rect(0, 26, 400, 18, C_BG2);
+    if (st.bankOk) {
+        const Trainer6& t = st.bank.trainer;
+        text(t.name + "   ID " + std::to_string(t.tid) + "   Geld " + money(st.bank.money), 8, 28, 0.45f, C_LIGHT);
+        text(std::to_string(st.bank.count()) + " Pokémon", 392, 28, 0.45f, C_LIGHT, RIGHT);
+    }
+}
+
+void drawTeam(const State& st) {
+    GameKind k = here(st);
+    int n = 0;
+    for (int i = 0; i < Bank::PARTY; i++) {
+        const BankEntry& e = st.bank.party[i];
+        if (!e.used) continue;
+        float x = 8 + (n % 2) * 196, y = 50 + (n / 2) * 62;
+        n++;
+        bool vis = fitsIn(e.pk, k);
+        rect(x, y, 188, 58, vis ? C_CARD : C_CARD_DIM);
+        drawIcon(e.pk, x + 2, y + 4, 1.0f, !vis);
+        text(monName(e.pk), x + 46, y + 3, 0.52f, C_TEXT, LEFT, 110);
+        if (!e.pk.isEgg()) {
+            text("Lv. " + std::to_string(e.pk.partyLevel()), x + 46, y + 21, 0.42f, C_MUTED);
+            if (e.pk.gender() < 2)
+                text(e.pk.gender() == 0 ? "♂" : "♀", x + 180, y + 3, 0.55f, e.pk.gender() == 0 ? C_MALE : C_FEMALE, RIGHT);
+            if (e.pk.isShiny()) text("★", x + 162, y + 3, 0.5f, C_SEL, RIGHT);
+        }
+        if (!vis) {
+            text("hier nicht sichtbar", x + 46, y + 38, 0.42f, C_TEXT);
+        } else {
+            u16 hp = rd16(e.pk.d.data() + 0xF0), maxHp = rd16(e.pk.d.data() + 0xF2);
+            float f = maxHp ? std::min(1.0f, float(hp) / maxHp) : 0;
+            u32 hc = f > 0.5f ? C_OK : f > 0.2f ? C_SEL : C_ERR;
+            rect(x + 46, y + 42, 100, 8, C2D_Color32(0xD8, 0xD3, 0xC8, 0xFF));
+            rect(x + 46, y + 42, 100 * f, 8, hc);
+            text(std::to_string(hp) + "/" + std::to_string(maxHp), x + 182, y + 38, 0.4f, C_MUTED, RIGHT);
+        }
+    }
+    if (!n) text("Kein Pokémon im Team", 200, 120, 0.6f, C_LIGHT, CENTER);
+}
+
+void drawPC(const State& st) {
+    GameKind k = here(st);
+    text("◀  Box " + std::to_string(st.box + 1) + "  ▶", 146, 48, 0.55f, C_WHITE, CENTER);
+    text("L / R", 146, 66, 0.38f, C_LIGHT, CENTER);
+    for (int s = 0; s < Bank::SLOTS; s++) {
+        const BankEntry& e = st.bank.boxes[st.box * Bank::SLOTS + s];
+        float x = 8 + (s % 6) * 46, y = 82 + (s / 6) * 31;
+        rect(x, y, 44, 29, C_BG2);
+        if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !fitsIn(e.pk, k));
+        if (s == st.cursor) frame(x, y, 44, 29, C_SEL);
+    }
+    // Detailansicht rechts
+    const BankEntry& sel = st.bank.boxes[st.box * Bank::SLOTS + st.cursor];
+    rect(290, 48, 102, 188, C_CARD);
+    if (!sel.used) {
+        text("leer", 341, 130, 0.5f, C_MUTED, CENTER);
+        return;
+    }
+    bool vis = fitsIn(sel.pk, k);
+    drawIcon(sel.pk, 301, 52, 2.0f, !vis);
+    text(monName(sel.pk), 341, 114, 0.5f, C_TEXT, CENTER, 96);
+    if (!sel.pk.isEgg() && g_names.species(sel.pk.species()) != monName(sel.pk))
+        text(g_names.species(sel.pk.species()), 341, 130, 0.4f, C_MUTED, CENTER, 96);
+    float y = 148;
+    for (u16 m : sel.pk.moves())
+        if (m) { text(g_names.move(m), 296, y, 0.4f, C_TEXT, LEFT, 92); y += 14; }
+    if (!vis) text("hier nicht sichtbar", 341, 218, 0.38f, C_ERR, CENTER, 96);
+}
+
+constexpr int BAG_ROWS = 10;
+
+void drawBag(const State& st) {
+    GameKind k = here(st);
+    text("Beutel", 8, 48, 0.55f, C_WHITE);
+    text("nur Taschen, die mitreisen", 392, 50, 0.4f, C_LIGHT, RIGHT);
+    if (st.bank.items.empty()) { text("leer", 200, 130, 0.6f, C_LIGHT, CENTER); return; }
+    for (int r = 0; r < BAG_ROWS; r++) {
+        int i = st.bagScroll + r;
+        if (i >= int(st.bank.items.size())) break;
+        const BankItem& b = st.bank.items[size_t(i)];
+        Pouch p = pouchOf(k, b.item);
+        float y = 70 + r * 17;
+        rect(8, y, 384, 16, r % 2 ? C_BG2 : C_BG);
+        u32 c = p == Pouch::None ? C_CARD_DIM : C_WHITE;
+        text(g_names.item(b.item), 14, y + 1, 0.45f, c, LEFT, 210);
+        text("× " + std::to_string(b.count), 280, y + 1, 0.45f, c, RIGHT);
+        text(p == Pouch::None ? "hier nicht sichtbar" : pouchName(p), 386, y + 2, 0.4f, p == Pouch::None ? C_ERR : C_LIGHT, RIGHT);
+    }
+    if (st.bank.items.size() > size_t(BAG_ROWS))
+        text("▲▼ blättern", 392, 242 - 18, 0.38f, C_LIGHT, RIGHT);
 }
 
 void drawTop(const State& st) {
-    consoleSelect(&topCon);
-    consoleClear();
-    say("%sPokémon World 3DS%s\n", HL, RST);
+    drawHeader(st);
     if (!st.bankOk) {
-        say("\n%sKein gemeinsamer Speicher gefunden.%s\n%s\n\nEinrichten am PC:\npw3d-reise speicher-neu …\n", ERR, RST,
-            st.bankErr.c_str());
+        text("Kein gemeinsamer Speicher gefunden.", 200, 100, 0.55f, C_ERR, CENTER);
+        text("Einrichten am PC: pw3d-reise speicher-neu …", 200, 124, 0.45f, C_LIGHT, CENTER);
         return;
     }
-    const Trainer6& t = st.bank.trainer;
-    say("Trainer %s  ID %05u  Geld %lu P\n", t.name.c_str(), t.tid, (unsigned long)st.bank.money);
-    if (st.current) say("Aktuell: %s (%s)\n", st.current->region, st.current->name);
-    else say("Aktuell: %s\n", st.bank.current.empty() ? "unterwegs" : st.bank.current.c_str());
-    say("--------------------------------------------------\n");
-
-    GameKind here = st.current ? st.current->kind : GameKind::USUM;
     switch (st.view) {
-    case View::Team:
-        say("%sTeam%s\n\n", HL, RST);
-        for (int i = 0; i < Bank::PARTY; i++)
-            if (st.bank.party[i].used) {
-                say(" %d. %s\n", i + 1, monLine(st.bank.party[i], here).c_str());
-                say("    %s%s%s\n", DIM, moveLine(st.bank.party[i].pk).c_str(), RST);
-            }
-        if (!g_names.loaded()) say("\n%sNamen fehlen: namen.txt mit tools/gen-namen.mjs\nerzeugen.%s\n", DIM, RST);
+    case View::Team: drawTeam(st); break;
+    case View::PC: drawPC(st); break;
+    case View::Bag: drawBag(st); break;
+    }
+    if (!g_icons.loaded() || !g_names.loaded())
+        text(std::string(!g_icons.loaded() ? "icons.bin" : "namen.txt") + " fehlt auf der SD", 392, 226, 0.36f, C_ERR, RIGHT);
+}
+
+// ---------- Unterer Bildschirm ----------
+struct Button {
+    float x, y, w, h;
+    bool hit(const touchPosition& t) const { return t.px >= x && t.px < x + w && t.py >= y && t.py < y + h; }
+};
+
+void button(const Button& b, const std::string& label, u32 bg, u32 fg, float size = 0.6f) {
+    rect(b.x, b.y, b.w, b.h, bg);
+    text(label, b.x + b.w / 2, b.y + b.h / 2 - size * 15, size, fg, CENTER, b.w - 8);
+}
+
+const Button B_TRAVEL{8, 34, 148, 66}, B_TEAM{164, 34, 148, 66}, B_PC{8, 108, 148, 66}, B_BAG{164, 108, 148, 66};
+const Button B_EXIT{8, 196, 304, 36}, B_BACK{8, 200, 304, 32};
+const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
+
+// Schaltflächen der Regionswahl: drei Spalten, je Region die installierten Spiele.
+const char* REGIONS[] = {"Hoenn", "Kalos", "Alola"};
+std::vector<std::pair<Button, const Game*>> travelButtons(const State& st) {
+    std::vector<std::pair<Button, const Game*>> out;
+    for (int r = 0; r < 3; r++) {
+        int n = 0;
+        for (const Game* g : st.installed)
+            if (std::string(g->region) == REGIONS[r]) out.push_back({Button{8.0f + r * 104, 56.0f + n++ * 34, 96, 30}, g});
+    }
+    return out;
+}
+
+void drawBottom(const State& st) {
+    rect(0, 0, 320, 26, C_HEAD);
+    switch (st.screen) {
+    case Screen::Menu:
+        text("Menü", 160, 4, 0.6f, C_WHITE, CENTER);
+        button(B_TRAVEL, "Reisen", C2D_Color32(0x3F, 0xB5, 0x5A, 0xFF), C_WHITE, 0.75f);
+        button(B_TEAM, "Team", st.view == View::Team ? C_SEL : C_BG2, st.view == View::Team ? C_TEXT : C_WHITE, 0.7f);
+        button(B_PC, "PC", st.view == View::PC ? C_SEL : C_BG2, st.view == View::PC ? C_TEXT : C_WHITE, 0.7f);
+        button(B_BAG, "Beutel", st.view == View::Bag ? C_SEL : C_BG2, st.view == View::Bag ? C_TEXT : C_WHITE, 0.7f);
+        text("X: Reisen   Y: Ansicht   L/R: Box", 160, 178, 0.4f, C_LIGHT, CENTER);
+        button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.55f);
         break;
-    case View::PC: {
-        say("%sPC  Box %d/%d%s   (L/R wechseln, grau = hier nicht sichtbar)\n\n", HL, st.box + 1, Bank::BOXES, RST);
-        // Zwei Spalten à 15 Plätze, damit eine volle Box auf den Bildschirm passt.
-        auto cell = [&](int s) {
-            const BankEntry& e = st.bank.boxes[st.box * Bank::SLOTS + s];
-            char num[8];
-            std::snprintf(num, sizeof num, "%2d ", s + 1);
-            if (!e.used) return std::string(num) + DIM + pad("-", 21) + RST;
-            std::string name = pad(cut(monName(e.pk), 20), 21);
-            return std::string(num) + (fitsIn(e.pk, here) ? "" : DIM) + name + RST;
-        };
-        for (int r = 0; r < Bank::SLOTS / 2; r++) say("%s %s\n", cell(r).c_str(), cell(r + Bank::SLOTS / 2).c_str());
-        if (st.box == 31 && kindGeneration(here) == 6) say("\n %sBox 32 gibt es nur in Gen 7.%s\n", DIM, RST);
+    case Screen::Travel: {
+        text("Wohin möchtest du reisen?", 160, 4, 0.55f, C_WHITE, CENTER);
+        for (int r = 0; r < 3; r++) {
+            rect(8 + r * 104, 32, 96, 20, regionColor(REGIONS[r]));
+            text(REGIONS[r], 56 + r * 104, 33, 0.5f, C_WHITE, CENTER);
+        }
+        for (auto& [b, g] : travelButtons(st)) {
+            bool isHere = g == st.current;
+            button(b, g->name, isHere ? C_BG2 : C_CARD, isHere ? C_LIGHT : C_TEXT, 0.48f);
+            if (isHere) text("hier", b.x + b.w - 4, b.y + 1, 0.32f, C_SEL, RIGHT);
+        }
+        button(B_BACK, "Zurück", C_BG2, C_WHITE, 0.55f);
         break;
     }
-    case View::Bag: {
-        say("%sBeutel%s  (nur Taschen, die mitreisen)\n\n", HL, RST);
-        if (st.bank.items.empty()) say(" %s(leer)%s\n", DIM, RST);
-        for (const BankItem& b : st.bank.items) {
-            Pouch p = pouchOf(here, b.item);
-            char cnt[16];
-            std::snprintf(cnt, sizeof cnt, "x%-4lu ", (unsigned long)b.count);
-            say(" %s%s%s%s%s\n", pad(g_names.item(b.item), 22).c_str(), cnt, DIM,
-                p == Pouch::None ? "(hier nicht sichtbar)" : pouchName(p), RST);
+    case Screen::Confirm:
+        text("Reise bestätigen", 160, 4, 0.6f, C_WHITE, CENTER);
+        rect(8, 36, 304, 26, regionColor(st.current ? st.current->region : "Alola"));
+        text(std::string("Von: ") + (st.current ? st.current->name : "?") + " (" + (st.current ? st.current->region : "?") + ")", 16, 40, 0.5f, C_WHITE, LEFT, 288);
+        rect(8, 66, 304, 26, regionColor(st.target->region));
+        text(std::string("Nach: ") + st.target->name + " (" + st.target->region + ")", 16, 70, 0.5f, C_WHITE, LEFT, 288);
+        text("Team, PC, Beutel und Geld werden übertragen,", 160, 104, 0.42f, C_LIGHT, CENTER);
+        text("danach startet das Spiel. Vorher wird alles gesichert.", 160, 120, 0.42f, C_LIGHT, CENTER, 300);
+        text("Hast du im aktuellen Spiel gespeichert?", 160, 148, 0.48f, C_SEL, CENTER, 300);
+        button(B_YES, "Reisen (A)", C_OK, C_WHITE, 0.55f);
+        button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.55f);
+        break;
+    case Screen::Busy: {
+        text(std::string("Reise nach ") + st.target->region, 160, 4, 0.6f, C_WHITE, CENTER);
+        float y = 40;
+        for (size_t i = 0; i < st.steps.size(); i++, y += 22)
+            text((i + 1 < st.steps.size() ? "✓ " : "… ") + st.steps[i], 16, y, 0.48f, i + 1 < st.steps.size() ? C_OK : C_WHITE);
+        break;
+    }
+    case Screen::Done:
+        text("Gute Reise!", 160, 4, 0.6f, C_WHITE, CENTER);
+        text(st.message, 160, 60, 0.48f, C_WHITE, CENTER, 300);
+        button(B_YES, "Spiel starten (A)", C_OK, C_WHITE, 0.5f);
+        button(B_NO, "Menü (B)", C_BG2, C_WHITE, 0.55f);
+        break;
+    case Screen::Error: {
+        text("Hinweis", 160, 4, 0.6f, C_WHITE, CENTER);
+        // Meldung zeilenweise
+        float y = 40;
+        size_t p = 0;
+        while (p <= st.message.size()) {
+            size_t nl = st.message.find('\n', p);
+            std::string line = st.message.substr(p, nl == std::string::npos ? std::string::npos : nl - p);
+            text(line, 160, y, 0.46f, y == 40 ? C_ERR : C_WHITE, CENTER, 300);
+            y += 18;
+            if (nl == std::string::npos) break;
+            p = nl + 1;
         }
+        button(B_BACK, "Zurück (B)", C_BG2, C_WHITE, 0.55f);
         break;
     }
     }
 }
 
-// ---------- Menü (unterer Bildschirm) ----------
-const char* MENU[] = {"Reisen", "Team ansehen", "PC ansehen", "Beutel ansehen", "Beenden"};
-constexpr int MENU_N = 5;
+C3D_RenderTarget *g_top, *g_bot;
 
-void drawBottom(const State& st) {
-    consoleSelect(&botCon);
-    consoleClear();
-    switch (st.screen) {
-    case Screen::Menu:
-        say("%sMenü%s\n\n", HL, RST);
-        for (int i = 0; i < MENU_N; i++) say(" %s %s\n", i == st.menuSel ? "\x10" : " ", MENU[i]);
-        say("\n%sA: wählen   START: beenden%s\n", DIM, RST);
-        break;
-    case Screen::Travel:
-        say("%sWohin möchtest du reisen?%s\n\n", HL, RST);
-        for (size_t i = 0; i < st.installed.size(); i++) {
-            const Game* g = st.installed[i];
-            say(" %s %-7s %s%s\n", int(i) == st.travelSel ? "\x10" : " ", g->region, g->name,
-                g == st.current ? "  (hier)" : "");
-        }
-        say("\n%sA: wählen   B: zurück%s\n", DIM, RST);
-        break;
-    case Screen::Confirm:
-        say("%sReise bestätigen%s\n\n", HL, RST);
-        say("Von:  %s (%s)\n", st.current ? st.current->name : "?", st.current ? st.current->region : "?");
-        say("Nach: %s (%s)\n\n", st.target->name, st.target->region);
-        say("Team, PC, Beutel und Geld werden\nübertragen, danach startet das Spiel.\nVorher wird alles gesichert.\n\n");
-        say("Hast du im aktuellen Spiel gespeichert?\n\n%sA: reisen   B: abbrechen%s\n", DIM, RST);
-        break;
-    case Screen::Done:
-    case Screen::Error:
-        say("%s", st.message.c_str());
-        say("\n\n%s%s%s\n", DIM, st.screen == Screen::Done ? "A: Spiel starten" : "B: zurück", RST);
-        break;
-    }
+void render(const State& st) {
+    C2D_TextBufClear(g_buf);
+    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+    C2D_TargetClear(g_top, C_BG);
+    C2D_SceneBegin(g_top);
+    drawTop(st);
+    C2D_TargetClear(g_bot, C_BG);
+    C2D_SceneBegin(g_bot);
+    drawBottom(st);
+    C3D_FrameEnd(0);
 }
 
 // ---------- Reisen ----------
-void step(const char* text) {
-    consoleSelect(&botCon);
-    say("%s\n", text);
-    gfxFlushBuffers();
-    gfxSwapBuffers();
-    gspWaitForVBlank();
+State* g_state = nullptr;
+
+void step(const char* t) {
+    g_state->steps.push_back(t);
+    render(*g_state);
 }
 
-bool backup(const char* stamp, const char* what, const std::vector<u8>& data) {
+bool backup(const char* stamp, const std::string& what, const std::vector<u8>& data) {
     std::string p = std::string(BACKUPS) + "/" + stamp + "-" + what;
     FILE* f = std::fopen(p.c_str(), "wb");
     if (!f) return false;
@@ -282,11 +416,10 @@ bool backup(const char* stamp, const char* what, const std::vector<u8>& data) {
 bool travel(State& st, std::string& err) {
     const Game& from = *st.current;
     const Game& to = *st.target;
-    consoleSelect(&botCon);
-    consoleClear();
-    say("%sReise nach %s%s\n\n", HL, to.region, RST);
+    st.steps.clear();
+    st.screen = Screen::Busy;
 
-    step("Lese Spielstände …");
+    step("Lese Spielstände");
     std::vector<u8> fromData, toData;
     if (!readSave(from, fromData, err) || !readSave(to, toData, err)) return false;
     std::string e;
@@ -296,150 +429,159 @@ bool travel(State& st, std::string& err) {
     if (!fromSav->valid()) { err = std::string(from.name) + ": Prüfsummen stimmen nicht"; return false; }
     if (!toSav->valid()) { err = std::string(to.name) + ": Prüfsummen stimmen nicht"; return false; }
 
-    step("Lege Sicherungen an …");
+    step("Lege Sicherungen an");
     mkdir(DIR, 0777);
     mkdir(BACKUPS, 0777);
     char stamp[32];
     std::time_t now = std::time(nullptr);
     std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&now));
-    FILE* bf = std::fopen(BANK, "rb");
     std::vector<u8> bankData;
-    if (bf) {
+    if (FILE* bf = std::fopen(BANK, "rb")) {
         std::fseek(bf, 0, SEEK_END);
         bankData.resize(size_t(std::ftell(bf)));
         std::fseek(bf, 0, SEEK_SET);
         std::fread(bankData.data(), 1, bankData.size(), bf);
         std::fclose(bf);
     }
-    if (!backup(stamp, (std::string(from.name) + ".main").c_str(), fromData) ||
-        !backup(stamp, (std::string(to.name) + ".main").c_str(), toData) || !backup(stamp, "speicher.bin", bankData)) {
+    if (!backup(stamp, std::string(from.name) + ".main", fromData) || !backup(stamp, std::string(to.name) + ".main", toData) ||
+        !backup(stamp, "speicher.bin", bankData)) {
         err = "Sicherung fehlgeschlagen";
         return false;
     }
 
-    step("Übertrage Pokémon, Items und Geld …");
+    step("Übertrage Pokémon, Items und Geld");
     Bank bank = st.bank;
     if (!bank.depart(*fromSav, err)) return false;
     int hidden = 0;
     if (!bank.arrive(*toSav, hidden, err)) return false;
 
-    step("Berechne Prüfsummen und Signatur …");
+    step("Berechne Prüfsummen und Signatur");
     toSav->finalize();
     auto check = openSave(toSav->raw(), e);
     if (!check || !check->valid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
 
-    step("Schreibe Spielstand …");
+    step("Schreibe Spielstand");
     if (!writeSave(to, toSav->raw(), err)) return false;
     if (!bank.save(BANK, err)) { err = "Spielstand geschrieben, aber Speicher nicht: " + err; return false; }
     writeLast(to.lowId);
     st.bank = bank;
     st.current = &to;
 
-    char msg[256];
-    std::snprintf(msg, sizeof msg, "%sGute Reise!%s\n\n%d Pokémon im Speicher,\n%d davon in %s nicht sichtbar.", OK,
-                  RST, bank.count(), hidden, to.name);
-    st.message = msg;
+    st.message = std::to_string(bank.count()) + " Pokémon im Speicher, " + std::to_string(hidden) + " davon in " + to.name +
+                 " nicht sichtbar.";
     return true;
 }
 
 // ---------- Eingabe ----------
-void input(State& st, u32 down) {
+void startTravel(State& st) {
+    if (!st.bankOk || !st.current) {
+        st.message = std::string("Reisen nicht möglich\n") +
+                     (st.bankOk ? "Das aktuelle Spiel (" + st.bank.current + ") hat keinen Spielstand." : "Kein gemeinsamer Speicher.");
+        st.screen = Screen::Error;
+    } else {
+        st.screen = Screen::Travel;
+    }
+}
+
+void doTravel(State& st) {
+    std::string err;
+    if (travel(st, err)) {
+        st.screen = Screen::Done;
+    } else {
+        st.message = "Reise abgebrochen\n" + err + "\nDeine Spielstände sind unverändert.";
+        st.screen = Screen::Error;
+    }
+}
+
+void doLaunch(State& st) {
+    if (launchGame(*st.target)) {
+        st.quit = true;
+    } else {
+        st.message = std::string("Spiel konnte nicht gestartet werden\nDie Reise ist erledigt.\nBitte starte ") +
+                     st.target->name + " selbst.";
+        st.screen = Screen::Error;
+    }
+}
+
+void input(State& st, u32 down, const touchPosition& t) {
+    bool touch = down & KEY_TOUCH;
     if (down & KEY_START) { st.quit = true; return; }
-    switch (st.screen) {
-    case Screen::Menu:
-        if (down & KEY_DOWN) st.menuSel = (st.menuSel + 1) % MENU_N;
-        if (down & KEY_UP) st.menuSel = (st.menuSel + MENU_N - 1) % MENU_N;
-        if (down & KEY_A) {
-            switch (st.menuSel) {
-            case 0:
-                if (!st.bankOk || !st.current) {
-                    st.message = std::string(ERR) + "Reisen nicht möglich:" + RST + "\n\n" +
-                                 (st.bankOk ? "Das aktuelle Spiel (" + st.bank.current + ") hat keinen Spielstand."
-                                            : "Kein gemeinsamer Speicher.");
-                    st.screen = Screen::Error;
-                } else {
-                    st.screen = Screen::Travel;
-                    st.travelSel = 0;
-                }
-                break;
-            case 1: st.view = View::Team; break;
-            case 2: st.view = View::PC; break;
-            case 3: st.view = View::Bag; break;
-            case 4: st.quit = true; break;
-            }
-        }
+
+    // Navigation im oberen Bildschirm (in allen Menüs außer während der Reise)
+    if (st.screen == Screen::Menu || st.screen == Screen::Travel) {
         if (st.view == View::PC) {
             if (down & KEY_R) st.box = (st.box + 1) % Bank::BOXES;
             if (down & KEY_L) st.box = (st.box + Bank::BOXES - 1) % Bank::BOXES;
+            if (down & KEY_DRIGHT) st.cursor = (st.cursor + 1) % Bank::SLOTS;
+            if (down & KEY_DLEFT) st.cursor = (st.cursor + Bank::SLOTS - 1) % Bank::SLOTS;
+            if (down & KEY_DDOWN) st.cursor = (st.cursor + 6) % Bank::SLOTS;
+            if (down & KEY_DUP) st.cursor = (st.cursor + Bank::SLOTS - 6) % Bank::SLOTS;
         }
-        break;
-    case Screen::Travel: {
-        int n = int(st.installed.size());
-        if (n && (down & KEY_DOWN)) st.travelSel = (st.travelSel + 1) % n;
-        if (n && (down & KEY_UP)) st.travelSel = (st.travelSel + n - 1) % n;
-        if (down & KEY_B) st.screen = Screen::Menu;
-        if (n && (down & KEY_A)) {
-            st.target = st.installed[st.travelSel];
-            st.screen = Screen::Confirm;
+        if (st.view == View::Bag) {
+            int maxScroll = std::max(0, int(st.bank.items.size()) - BAG_ROWS);
+            if (down & KEY_DDOWN) st.bagScroll = std::min(maxScroll, st.bagScroll + 1);
+            if (down & KEY_DUP) st.bagScroll = std::max(0, st.bagScroll - 1);
         }
-        break;
+        if (down & KEY_Y) st.view = st.view == View::Team ? View::PC : st.view == View::PC ? View::Bag : View::Team;
     }
+
+    switch (st.screen) {
+    case Screen::Menu:
+        if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) startTravel(st);
+        else if (touch && B_TEAM.hit(t)) st.view = View::Team;
+        else if (touch && B_PC.hit(t)) st.view = View::PC;
+        else if (touch && B_BAG.hit(t)) st.view = View::Bag;
+        else if (touch && B_EXIT.hit(t)) st.quit = true;
+        break;
+    case Screen::Travel:
+        if ((touch && B_BACK.hit(t)) || (down & KEY_B)) { st.screen = Screen::Menu; break; }
+        if (touch)
+            for (auto& [b, g] : travelButtons(st))
+                if (b.hit(t)) { st.target = g; st.screen = Screen::Confirm; }
+        break;
     case Screen::Confirm:
-        if (down & KEY_B) st.screen = Screen::Travel;
-        if (down & KEY_A) {
-            std::string err;
-            if (travel(st, err)) {
-                st.screen = Screen::Done;
-            } else {
-                st.message = std::string(ERR) + "Reise abgebrochen:" + RST + "\n\n" + err +
-                             "\n\nDeine Spielstände sind unverändert.";
-                st.screen = Screen::Error;
-            }
-        }
+        if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Travel;
+        else if ((touch && B_YES.hit(t)) || (down & KEY_A)) doTravel(st);
         break;
     case Screen::Done:
-        if (down & KEY_A) {
-            if (launchGame(*st.target)) {
-                st.quit = true;
-            } else {
-                st.message = std::string(ERR) + "Spiel konnte nicht gestartet werden." + RST +
-                             "\n\nDie Reise ist trotzdem erledigt.\nBitte starte " + st.target->name + " selbst.";
-                st.screen = Screen::Error;
-            }
-        }
+        if ((touch && B_YES.hit(t)) || (down & KEY_A)) doLaunch(st);
+        else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
         break;
     case Screen::Error:
-        if (down & KEY_B) st.screen = Screen::Menu;
+        if ((touch && B_BACK.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
         break;
+    case Screen::Busy: break;
     }
-    st.dirty = true;
 }
 
 } // namespace
 
 int main() {
     gfxInitDefault();
-    consoleInit(GFX_TOP, &topCon);
-    consoleInit(GFX_BOTTOM, &botCon);
+    C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
+    C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
+    C2D_Prepare();
+    g_top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+    g_bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    g_buf = C2D_TextBufNew(4096);
 
     State st;
-    consoleSelect(&botCon);
-    say("Lade …\n");
+    g_state = &st;
+    render(st); // leerer Rahmen während des Ladens
     loadState(st);
 
     while (aptMainLoop() && !st.quit) {
         hidScanInput();
         u32 down = hidKeysDown();
-        if (down) input(st, down);
-        if (st.dirty) {
-            drawTop(st);
-            drawBottom(st);
-            st.dirty = false;
-        }
-        gfxFlushBuffers();
-        gfxSwapBuffers();
-        gspWaitForVBlank();
+        touchPosition t{};
+        if (down & KEY_TOUCH) hidTouchRead(&t);
+        if (down) input(st, down, t);
+        render(st);
     }
+
+    C2D_TextBufDelete(g_buf);
+    C2D_Fini();
+    C3D_Fini();
     gfxExit();
     return 0;
 }
