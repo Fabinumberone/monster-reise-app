@@ -31,7 +31,8 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 4. Reise-App (libctru: Spielstand-Zugriff wie Checkpoint, Titelstart per APT).
 
 ## Spielkennungen (Title-IDs, EU)
-- Omega Rubin `000400000011C400`, Alpha Saphir `000400000011C500`, X `0004000000055D00`, Y `0004000000055E00`, Ultrasonne `00040000001B5000`, Ultramond `00040000001B5100`.
+- Unterstützt werden sollen alle acht 3DS-Hauptspiele: X, Y, Omega Rubin, Alpha Saphir (Gen 6, zwei Formate: XY und ORAS) sowie Sonne, Mond, Ultrasonne, Ultramond (Gen 7, zwei Formate: SM und USUM). Die Reise-App merkt sich je Region, welche Edition gespielt wird.
+- Omega Rubin `000400000011C400`, Alpha Saphir `000400000011C500`, X `0004000000055D00`, Y `0004000000055E00`, Sonne `0004000000164800`, Mond `0004000000175E00`, Ultrasonne `00040000001B5000`, Ultramond `00040000001B5100` (Sonne/Mond noch prüfen).
 - Spielstand in Azahar: `%APPDATA%\Azahar\sdmc\Nintendo 3DS\<id0>\<id1>\title\00040000\<untere 8 Stellen>\data\00000001\main` (prüfen, sobald vorhanden).
 
 ## Vorhandene Werkzeuge
