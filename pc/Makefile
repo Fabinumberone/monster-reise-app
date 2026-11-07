@@ -1,7 +1,7 @@
 # PC-Werkzeug. Braucht einen Host-g++ (z. B. MinGW/WinLibs).
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
-SRC      := main.cpp $(wildcard ../core/*.cpp)
+SRC      := main.cpp selftest.cpp $(wildcard ../core/*.cpp)
 OUT      := ../build/pw3d-reise.exe
 
 $(OUT): $(SRC) $(wildcard ../core/*.hpp)

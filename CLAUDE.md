@@ -21,7 +21,8 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 - `core/` und `pc/` angelegt: Gen-6-Spielstand (Blocktabelle + CRC16 prüfen/neu berechnen), PK6 ent-/verschlüsseln, Team/Boxen/Trainer auslesen, Suche nach gültigen PK6 im Spielstand (`scan`) zur Bestätigung der Offsets.
 - **Offsets und Blocktabelle stammen aus dem Gedächtnis (Stand PKHeX) und sind noch nicht an echten Spielständen geprüft.** `pw3d-reise info` meldet, ob alle Block-Prüfsummen stimmen; `scan` findet die tatsächlichen Box-/Team-Offsets.
 - Noch keine Spielstände vorhanden: Azahar wurde noch nie gestartet (kein `%APPDATA%\Azahar`). CIAs in Azahar installieren, je Spiel bis zum ersten Speichern spielen.
-- Kein Host-C++-Compiler installiert (nur devkitARM). Der Kern wird vorerst mit `arm-none-eabi-g++ -fsyntax-only` geprüft. Für das PC-Werkzeug wird ein MinGW-g++ gebraucht (z. B. `winget install BrechtSanders.WinLibs.POSIX.UCRT`), Installation nur nach Rückfrage.
+- Host-Compiler: WinLibs (MinGW g++ 16.2) per winget installiert, liegt unter `%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_*\mingw64\bin` (in neuen Shells im PATH). Bauen: in `pc/` `mingw32-make` → `build/pw3d-reise.exe`.
+- `pw3d-reise selbsttest` läuft durch: CRC-Testvektoren und PK6-Rundlauf (verschlüsseln/entschlüsseln) stimmen. Ob die Blocktabelle (Vertauschungstabelle der Blöcke A–D eingeschlossen) zu echten Daten passt, zeigt erst ein echter Spielstand.
 
 ## Nächste Schritte
 1. Echte Spielstände von Omega Rubin und X aus Azahar holen (nach `saves/`, ignoriert), `info`/`scan` laufen lassen, Offsets bestätigen bzw. korrigieren.

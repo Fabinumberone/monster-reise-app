@@ -74,9 +74,12 @@ static int cmdScan(const Save6& sav) {
     return 0;
 }
 
+int runSelftest();
+
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "selbsttest") return runSelftest();
     if (argc < 3) {
-        std::fprintf(stderr, "Aufruf: pw3d-reise info|scan <main>\n");
+        std::fprintf(stderr, "Aufruf: pw3d-reise selbsttest | info <main> | scan <main>\n");
         return 1;
     }
     std::string cmd = argv[1];
