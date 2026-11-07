@@ -1,3 +1,5 @@
 Originalspiele/
 extracted/
 node_modules/
+build/
+saves/
