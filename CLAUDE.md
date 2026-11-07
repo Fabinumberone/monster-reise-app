@@ -16,6 +16,7 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 5. **Reise-App** (3DS-Homebrew, .3dsx/CIA): Region wählen → Spielstand übertragen → Spiel starten. Vor jeder Übertragung Sicherung.
 6. **Später**: Menüpunkt „Reisen“ im Spiel selbst (3GX-Plugin oder Code-Patch). Alle Pokémon der jeweiligen Region fangbar, in Omega Rubin auch die Alpha-Saphir-Exklusiven (Begegnungstabellen per LayeredFS ändern).
 7. Nicht übertragbar: Story-Fortschritt, Orden, Ereignis-Flags (spielspezifisch).
+8. **Gen 1/2 (Virtual Console, später)**: Kanto/Johto als weitere Regionen. Vereinbarte Item-Regeln (2026-11-07): Beutel und Item-PC werden für Gen 1/2 gemeinsam behandelt. Beim Ankommen zuerst der Beutel (20 Plätze; Reihenfolge: Bälle, Medizin, **Schutz/Superschutz/Top-Schutz** – braucht man unterwegs), dann der Item-PC (50 Plätze), höchstens 99 je Item; der Rest und Items ohne Gen-1/2-Entsprechung bleiben unsichtbar im Speicher („geschrieben“-Feld). Beim Abreisen Beutel + Item-PC zusammenzählen. In Gen 6/7 landet alles im Beutel. Item-Nummern brauchen eine Zuordnungstabelle Gen 1/2 ↔ Gen 6/7.
 
 ## Stand (2026-11-07)
 - `core/` und `pc/` angelegt: Gen-6-Spielstand (Blocktabelle + CRC16 prüfen/neu berechnen), PK6 ent-/verschlüsseln, Team/Boxen/Trainer auslesen, Suche nach gültigen PK6 im Spielstand (`scan`) zur Bestätigung der Offsets.
