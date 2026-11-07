@@ -2,6 +2,8 @@
 //   pw3d-reise info <main>   Spiel, Blöcke/Prüfsummen, Trainer, Team, Boxen
 //   pw3d-reise scan <main>   sucht gültige Pokémon-Datensätze im ganzen Spielstand
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -79,12 +81,74 @@ static int cmdScan(const Save6& sav) {
     return 0;
 }
 
+static bool loadSave(const std::string& path, Save6& sav) {
+    std::vector<uint8_t> data;
+    if (!readFile(path, data)) {
+        std::fprintf(stderr, "Kann %s nicht lesen\n", path.c_str());
+        return false;
+    }
+    std::string err;
+    if (!sav.load(std::move(data), err)) {
+        std::fprintf(stderr, "%s: %s\n", path.c_str(), err.c_str());
+        return false;
+    }
+    if (!sav.checksumsValid()) {
+        std::fprintf(stderr, "%s: Prüfsummen stimmen schon vor der Änderung nicht, Abbruch\n", path.c_str());
+        return false;
+    }
+    return true;
+}
+
+// kopiere <quelle> <teamplatz 1-6> <ziel> <box 1-31> <platz 1-30>
+// Kopiert ein Team-Pokémon unverändert in einen leeren Boxplatz des Ziels. Ziel wird überschrieben.
+static int cmdKopiere(char** a) {
+    Save6 src, dst;
+    if (!loadSave(a[0], src) || !loadSave(a[2], dst)) return 1;
+    int t = std::atoi(a[1]) - 1, b = std::atoi(a[3]) - 1, s = std::atoi(a[4]) - 1;
+    if (t < 0 || t >= src.partyCount() || b < 0 || b >= dst.boxCount() || s < 0 || s >= Save6::BOX_SLOTS) {
+        std::fprintf(stderr, "Ungültiger Platz\n");
+        return 1;
+    }
+    if (!dst.boxSlotEmpty(b, s)) {
+        std::fprintf(stderr, "Box %d Platz %d ist belegt, Abbruch\n", b + 1, s + 1);
+        return 1;
+    }
+    PK6 pk = src.partySlot(t);
+    if (!pk.looksValid()) {
+        std::fprintf(stderr, "Quell-Pokémon ungültig, Abbruch\n");
+        return 1;
+    }
+    dst.setBoxSlot(b, s, pk);
+    dst.updateChecksums();
+
+    // Gegenprobe vor dem Schreiben: neu laden und vergleichen.
+    Save6 check;
+    std::string err;
+    // Verglichen werden nur die 0xE8 Byte, die in der Box gespeichert werden.
+    if (!check.load(dst.raw(), err) || !check.checksumsValid() ||
+        std::memcmp(check.boxSlot(b, s).d.data(), pk.d.data(), PK6_BOX_SIZE) != 0) {
+        std::fprintf(stderr, "Gegenprobe fehlgeschlagen, nichts geschrieben\n");
+        return 1;
+    }
+    std::ofstream f(a[2], std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(dst.raw().data()), std::streamsize(dst.raw().size()));
+    if (!f) {
+        std::fprintf(stderr, "Schreiben fehlgeschlagen\n");
+        return 1;
+    }
+    std::printf("Kopiert nach Box %d Platz %d:\n", b + 1, s + 1);
+    printPk("", pk);
+    return 0;
+}
+
 int runSelftest();
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "selbsttest") return runSelftest();
+    if (argc == 7 && std::string(argv[1]) == "kopiere") return cmdKopiere(argv + 2);
     if (argc < 3) {
-        std::fprintf(stderr, "Aufruf: pw3d-reise selbsttest | info <main> | scan <main>\n");
+        std::fprintf(stderr, "Aufruf: pw3d-reise selbsttest | info <main> | scan <main>\n"
+                             "        pw3d-reise kopiere <quelle> <teamplatz> <ziel> <box> <platz>\n");
         return 1;
     }
     std::string cmd = argv[1];
