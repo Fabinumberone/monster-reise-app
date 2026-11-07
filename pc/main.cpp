@@ -25,6 +25,8 @@ static void printPk(const char* label, const PK6& pk) {
     std::printf("  %-8s Nr. %3u Form %u  \"%s\"  OT \"%s\" %05u/%05u  EP %u  Attacken %u %u %u %u%s%s\n", label,
                 pk.species(), pk.form(), pk.nickname().c_str(), pk.otName().c_str(), pk.tid(), pk.sid(), unsigned(pk.exp()),
                 m[0], m[1], m[2], m[3], pk.isEgg() ? "  [Ei]" : "", pk.checksumValid() ? "" : "  [PRÜFSUMME FALSCH]");
+    std::printf("           Spiel %u  Sprache %u  Geschlecht %u%s\n", pk.version(), pk.language(), pk.gender(),
+                pk.isShiny() ? "  schillernd" : "");
 }
 
 static int cmdInfo(Save6& sav) {
@@ -99,6 +101,24 @@ static bool loadSave(const std::string& path, Save6& sav) {
     return true;
 }
 
+// Prüfsummen neu berechnen, Gegenprobe (neu laden, alle Prüfsummen ok) und schreiben.
+static bool writeSave(const std::string& path, Save6& sav) {
+    sav.updateChecksums();
+    Save6 check;
+    std::string err;
+    if (!check.load(sav.raw(), err) || !check.checksumsValid()) {
+        std::fprintf(stderr, "Gegenprobe fehlgeschlagen, nichts geschrieben\n");
+        return false;
+    }
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(sav.raw().data()), std::streamsize(sav.raw().size()));
+    if (!f) {
+        std::fprintf(stderr, "Schreiben fehlgeschlagen\n");
+        return false;
+    }
+    return true;
+}
+
 // kopiere <quelle> <teamplatz 1-6> <ziel> <box 1-31> <platz 1-30>
 // Kopiert ein Team-Pokémon unverändert in einen leeren Boxplatz des Ziels. Ziel wird überschrieben.
 static int cmdKopiere(char** a) {
@@ -119,25 +139,41 @@ static int cmdKopiere(char** a) {
         return 1;
     }
     dst.setBoxSlot(b, s, pk);
-    dst.updateChecksums();
-
-    // Gegenprobe vor dem Schreiben: neu laden und vergleichen.
-    Save6 check;
-    std::string err;
+    dst.registerDex(pk);
     // Verglichen werden nur die 0xE8 Byte, die in der Box gespeichert werden.
-    if (!check.load(dst.raw(), err) || !check.checksumsValid() ||
-        std::memcmp(check.boxSlot(b, s).d.data(), pk.d.data(), PK6_BOX_SIZE) != 0) {
+    if (std::memcmp(dst.boxSlot(b, s).d.data(), pk.d.data(), PK6_BOX_SIZE) != 0) {
         std::fprintf(stderr, "Gegenprobe fehlgeschlagen, nichts geschrieben\n");
         return 1;
     }
-    std::ofstream f(a[2], std::ios::binary | std::ios::trunc);
-    f.write(reinterpret_cast<const char*>(dst.raw().data()), std::streamsize(dst.raw().size()));
-    if (!f) {
-        std::fprintf(stderr, "Schreiben fehlgeschlagen\n");
-        return 1;
-    }
-    std::printf("Kopiert nach Box %d Platz %d:\n", b + 1, s + 1);
+    if (!writeSave(a[2], dst)) return 1;
+    std::printf("Kopiert nach Box %d Platz %d, im Pokédex eingetragen:\n", b + 1, s + 1);
     printPk("", pk);
+    return 0;
+}
+
+// pokedex <main>: trägt alle Pokémon aus Team und Boxen im Pokédex ein.
+static int cmdPokedex(const char* path) {
+    Save6 sav;
+    if (!loadSave(path, sav)) return 1;
+    int n = 0;
+    for (int i = 0; i < sav.partyCount() && i < 6; i++) { sav.registerDex(sav.partySlot(i)); n++; }
+    for (int b = 0; b < sav.boxCount(); b++)
+        for (int s = 0; s < Save6::BOX_SLOTS; s++)
+            if (!sav.boxSlotEmpty(b, s)) { sav.registerDex(sav.boxSlot(b, s)); n++; }
+    if (!writeSave(path, sav)) return 1;
+    std::printf("%d Pokémon im Pokédex eingetragen\n", n);
+    return 0;
+}
+
+// trainer <quelle> <ziel>: Ziel übernimmt Trainer-ID, Geheim-ID, Name und Geschlecht der Quelle.
+static int cmdTrainer(const char* srcPath, const char* dstPath) {
+    Save6 src, dst;
+    if (!loadSave(srcPath, src) || !loadSave(dstPath, dst)) return 1;
+    Trainer6 t = src.trainer(), old = dst.trainer();
+    int n = dst.adoptTrainer(t);
+    if (!writeSave(dstPath, dst)) return 1;
+    std::printf("Trainer \"%s\" %05u/%05u -> \"%s\" %05u/%05u, %d eigene Pokémon umgeschrieben\n", old.name.c_str(),
+                old.tid, old.sid, t.name.c_str(), t.tid, t.sid, n);
     return 0;
 }
 
@@ -146,9 +182,12 @@ int runSelftest();
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "selbsttest") return runSelftest();
     if (argc == 7 && std::string(argv[1]) == "kopiere") return cmdKopiere(argv + 2);
+    if (argc == 3 && std::string(argv[1]) == "pokedex") return cmdPokedex(argv[2]);
+    if (argc == 4 && std::string(argv[1]) == "trainer") return cmdTrainer(argv[2], argv[3]);
     if (argc < 3) {
-        std::fprintf(stderr, "Aufruf: pw3d-reise selbsttest | info <main> | scan <main>\n"
-                             "        pw3d-reise kopiere <quelle> <teamplatz> <ziel> <box> <platz>\n");
+        std::fprintf(stderr, "Aufruf: pw3d-reise selbsttest | info <main> | scan <main> | pokedex <main>\n"
+                             "        pw3d-reise kopiere <quelle> <teamplatz> <ziel> <box> <platz>\n"
+                             "        pw3d-reise trainer <quelle> <ziel>\n");
         return 1;
     }
     std::string cmd = argv[1];

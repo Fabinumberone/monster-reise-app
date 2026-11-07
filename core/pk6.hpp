@@ -38,6 +38,10 @@ struct PK6 {
     uint8_t ability() const;
     uint32_t pid() const;
     uint8_t form() const;
+    uint8_t gender() const { return (d[0x1D] >> 1) & 3; } // 0 männlich, 1 weiblich, 2 geschlechtslos
+    uint8_t version() const { return d[0xDF]; }            // Herkunftsspiel (X 24, Y 25, AS 26, OR 27, …)
+    uint8_t language() const { return d[0xE3]; }           // 1 JPN, 2 ENG, 3 FRA, 4 ITA, 5 GER, 7 SPA, 8 KOR
+    bool isShiny() const;
     std::array<uint16_t, 4> moves() const;
     uint32_t iv32() const;
     bool isEgg() const { return (iv32() >> 30) & 1; }

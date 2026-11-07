@@ -40,6 +40,8 @@ struct Layout6 {
     uint32_t party;     // 6 × 0x104, danach Anzahl
     uint32_t box;       // 31 × 30 × 0xE8
     uint32_t boxCount;
+    uint32_t dex;       // Pokédex-Block
+    uint32_t dexLang;   // Sprachbits relativ zu dex (7 je Art)
 };
 
 class Save6 {
@@ -65,6 +67,15 @@ public:
     bool boxSlotEmpty(int box, int slot) const;
     PK6 boxSlot(int box, int slot) const;
     void setBoxSlot(int box, int slot, PK6 pk);
+
+    // Pokédex: trägt das Pokémon als gesehen und gefangen ein (Geschlecht, Schillerfarbe, Sprache).
+    // Formen werden noch nicht eingetragen.
+    void registerDex(const PK6& pk);
+    bool dexCaught(uint16_t species) const;
+
+    // Setzt den Trainer des Spielstands auf t. Alle Pokémon (Team und Boxen), deren Originaltrainer
+    // der bisherige Trainer ist, bekommen ebenfalls t als Originaltrainer. Gibt deren Anzahl zurück.
+    int adoptTrainer(const Trainer6& t);
 
     std::vector<uint8_t>& raw() { return data_; }
     const std::vector<uint8_t>& raw() const { return data_; }

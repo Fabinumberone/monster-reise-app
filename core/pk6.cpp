@@ -76,6 +76,10 @@ uint32_t PK6::exp() const { return rd32(d.data() + 0x10); }
 uint8_t PK6::ability() const { return d[0x14]; }
 uint32_t PK6::pid() const { return rd32(d.data() + 0x18); }
 uint8_t PK6::form() const { return d[0x1D] >> 3; }
+bool PK6::isShiny() const {
+    uint32_t p = pid();
+    return (tid() ^ sid() ^ (p >> 16) ^ (p & 0xFFFF)) < 16;
+}
 std::array<uint16_t, 4> PK6::moves() const {
     return {rd16(d.data() + 0x5A), rd16(d.data() + 0x5C), rd16(d.data() + 0x5E), rd16(d.data() + 0x60)};
 }
