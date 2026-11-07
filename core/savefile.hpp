@@ -43,6 +43,8 @@ public:
 
     virtual Trainer6 trainer() const = 0;
     virtual void setTrainer(const Trainer6& t) = 0;
+    virtual uint32_t money() const = 0;
+    virtual void setMoney(uint32_t v) = 0;
 
     virtual int partyCount() const = 0;
     virtual void setPartyCount(int n) = 0;

@@ -26,6 +26,14 @@ struct BankEntry {
     PK6 gen6;
 };
 
+// Item im gemeinsamen Beutel. written = beim letzten Ankommen ins Spiel geschriebene Anzahl;
+// der Rest (count − written) war dort nicht sichtbar und bleibt beim Abreisen erhalten.
+struct BankItem {
+    uint16_t item = 0;
+    uint16_t written = 0;
+    uint32_t count = 0;
+};
+
 class Bank {
 public:
     static constexpr int PARTY = 6, BOXES = 32, SLOTS = 30;
@@ -34,6 +42,12 @@ public:
     std::string current; // Spiel, in dem man sich gerade befindet (kindName), leer = keins
     std::array<BankEntry, PARTY> party{};
     std::vector<BankEntry> boxes = std::vector<BankEntry>(BOXES * SLOTS);
+    std::vector<BankItem> items; // reisende Taschen (siehe items.hpp)
+    uint32_t money = 0;
+    bool moneyKnown = false;     // false bei Speichern der Version 1, bis zur nächsten Abreise
+
+    // Items eines weiteren Spielstands dazulegen (unsichtbar im aktuellen Spiel).
+    void addItemsFrom(const SaveFile& sav);
 
     // Neu einrichten: start bestimmt Trainer, Team und Boxen. Pokémon, die es nur in den
     // weiteren Spielständen gibt, kommen ans Team (falls Platz) oder in freie Boxplätze.

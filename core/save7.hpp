@@ -39,8 +39,8 @@ public:
 
     Trainer6 trainer() const override;
     void setTrainer(const Trainer6& t) override;
-    uint32_t money() const;
-    void setMoney(uint32_t v);
+    uint32_t money() const override;
+    void setMoney(uint32_t v) override;
 
     int partyCount() const override;
     void setPartyCount(int n) override;

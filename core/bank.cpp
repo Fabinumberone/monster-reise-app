@@ -7,6 +7,7 @@
 #include <iterator>
 
 #include "bytes.hpp"
+#include "items.hpp"
 
 namespace pw3d {
 
@@ -96,7 +97,20 @@ void Bank::create(const SaveFile& start, const std::vector<const SaveFile*>& oth
             e.inGame = true;
         }
 
+    items.clear();
+    for (const ItemStack& s : readTravelItems(start)) {
+        BankItem* e = nullptr;
+        for (auto& b : items)
+            if (b.item == s.item) e = &b;
+        if (!e) { items.push_back({s.item, 0, 0}); e = &items.back(); }
+        e->count += s.count;
+        e->written = uint16_t(e->written + s.count); // steht im Startspiel
+    }
+    money = start.money();
+    moneyKnown = true;
+
     for (const SaveFile* o : others) {
+        addItemsFrom(*o);
         Trainer6 ot = o->trainer();
         auto add = [&](PK6 pk, bool fromParty, int box, int slot) {
             if (!present(pk) || find(pk)) return;
@@ -117,6 +131,16 @@ void Bank::create(const SaveFile& start, const std::vector<const SaveFile*>& oth
         for (int b = 0; b < o->boxCount(); b++)
             for (int s = 0; s < SLOTS; s++)
                 if (!o->boxSlotEmpty(b, s)) add(o->boxSlot(b, s), false, b, s);
+    }
+}
+
+void Bank::addItemsFrom(const SaveFile& sav) {
+    for (const ItemStack& s : readTravelItems(sav)) {
+        BankItem* e = nullptr;
+        for (auto& b : items)
+            if (b.item == s.item) e = &b;
+        if (!e) { items.push_back({s.item, 0, 0}); e = &items.back(); }
+        e->count += s.count; // written bleibt: im aktuellen Spiel nicht sichtbar
     }
 }
 
@@ -171,10 +195,24 @@ bool Bank::depart(const SaveFile& sav, std::string& err) {
         if (!keep(e, &nb[i])) { err = "Kein Platz mehr für nicht angezeigte Pokémon"; return false; }
     }
 
+    // Items: Was im Spiel liegt, ist der neue Stand; was dort nicht sichtbar war, bleibt dazu.
+    std::vector<BankItem> ni;
+    auto addTo = [&](uint16_t item, uint32_t n) {
+        if (!n) return;
+        for (auto& b : ni)
+            if (b.item == item) { b.count += n; return; }
+        ni.push_back({item, 0, n});
+    };
+    for (const ItemStack& s : readTravelItems(sav)) addTo(s.item, s.count);               // Spielinhalt zuerst
+    for (auto& b : items) addTo(b.item, b.count - std::min<uint32_t>(b.written, b.count)); // unsichtbarer Rest
+
     for (auto& e : np) e.inGame = false;
     for (auto& e : nb) e.inGame = false;
     party = np;
     boxes = nb;
+    items = ni;
+    money = sav.money();
+    moneyKnown = true;
     current.clear();
     return true;
 }
@@ -237,6 +275,14 @@ bool Bank::arrive(SaveFile& sav, int& hidden, std::string& err) {
             if (e.used && !fits) hidden++;
         }
 
+    // Items und Geld
+    std::vector<ItemStack> stacks;
+    for (auto& b : items) stacks.push_back({b.item, uint16_t(std::min<uint32_t>(b.count, 0xFFFF))});
+    std::vector<uint16_t> written;
+    writeTravelItems(sav, stacks, written);
+    for (size_t i = 0; i < items.size(); i++) items[i].written = written[i];
+    if (moneyKnown) sav.setMoney(std::min<uint32_t>(money, 9999999));
+
     Trainer6 t = sav.trainer();
     t.tid = trainer.tid;
     t.sid = trainer.sid;
@@ -251,6 +297,8 @@ bool Bank::arrive(SaveFile& sav, int& hidden, std::string& err) {
 // "PW3DBANK", u32 Version 1, Trainer (TID, SID, Geschlecht, 3 frei, Name 26 Byte UTF-16),
 // aktuelles Spiel (16 Byte), dann 6 + 960 Einträge: Flags (1 belegt, 2 im Spiel, 4 Gen-6-Stand),
 // 3 frei, 0x104 Gen-7-Form, 0x104 Gen-6-Stand. Unverschlüsselt.
+// Version 2 hängt an: u32 Geld, u8 Geld bekannt, 3 frei, u32 Anzahl Items, je Item
+// u16 Item, u16 geschrieben, u32 Anzahl. Version 1 wird weiter gelesen (ohne Items/Geld).
 
 namespace {
 constexpr char MAGIC[8] = {'P', 'W', '3', 'D', 'B', 'A', 'N', 'K'};
@@ -261,7 +309,7 @@ constexpr size_t HEADER = 8 + 4 + 8 + 26 + 16;
 bool Bank::save(const std::string& path, std::string& err) const {
     std::vector<uint8_t> out(HEADER + (PARTY + BOXES * SLOTS) * ENTRY, 0);
     std::memcpy(out.data(), MAGIC, 8);
-    wr32(&out[8], 1);
+    wr32(&out[8], 2);
     wr16(&out[12], trainer.tid);
     wr16(&out[14], trainer.sid);
     out[16] = trainer.gender;
@@ -279,6 +327,19 @@ bool Bank::save(const std::string& path, std::string& err) const {
     for (auto& e : party) put(e);
     for (auto& e : boxes) put(e);
 
+    // Version 2: Geld und Items
+    size_t tail = out.size();
+    out.resize(tail + 12 + items.size() * 8, 0);
+    wr32(&out[tail], money);
+    out[tail + 4] = moneyKnown ? 1 : 0;
+    wr32(&out[tail + 8], uint32_t(items.size()));
+    for (size_t i = 0; i < items.size(); i++) {
+        uint8_t* q = &out[tail + 12 + i * 8];
+        wr16(q, items[i].item);
+        wr16(q + 2, items[i].written);
+        wr32(q + 4, items[i].count);
+    }
+
     std::string tmp = path + ".neu";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -294,10 +355,25 @@ bool Bank::load(const std::string& path, std::string& err) {
     std::ifstream f(path, std::ios::binary);
     if (!f) { err = "Kann " + path + " nicht lesen"; return false; }
     std::vector<uint8_t> in((std::istreambuf_iterator<char>(f)), {});
-    if (in.size() != HEADER + (PARTY + BOXES * SLOTS) * ENTRY || std::memcmp(in.data(), MAGIC, 8) != 0 ||
-        rd32(&in[8]) != 1) {
-        err = path + " ist kein gemeinsamer Speicher (Version 1)";
+    const size_t base = HEADER + (PARTY + BOXES * SLOTS) * ENTRY;
+    uint32_t version = in.size() >= 12 ? rd32(&in[8]) : 0;
+    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || (version != 1 && version != 2) ||
+        (version == 1 && in.size() != base) || (version == 2 && in.size() < base + 12)) {
+        err = path + " ist kein gemeinsamer Speicher (Version 1 oder 2)";
         return false;
+    }
+    items.clear();
+    money = 0;
+    moneyKnown = false;
+    if (version == 2) {
+        money = rd32(&in[base]);
+        moneyKnown = in[base + 4] != 0;
+        uint32_t n = rd32(&in[base + 8]);
+        if (in.size() != base + 12 + size_t(n) * 8) { err = path + ": Itemliste beschädigt"; return false; }
+        for (uint32_t i = 0; i < n; i++) {
+            const uint8_t* q = &in[base + 12 + i * 8];
+            items.push_back({rd16(q), rd16(q + 2), rd32(q + 4)});
+        }
     }
     trainer.tid = rd16(&in[12]);
     trainer.sid = rd16(&in[14]);

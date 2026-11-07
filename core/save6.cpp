@@ -107,6 +107,9 @@ void Save6::setTrainer(const Trainer6& t) {
     utf8ToUtf16(t.name, p + 0x48, 13);
 }
 
+uint32_t Save6::money() const { return rd32(&data_[0x4208]); }
+void Save6::setMoney(uint32_t v) { wr32(&data_[0x4208], v); }
+
 int Save6::partyCount() const { return data_[layout_.party + 6 * PK6_PARTY_SIZE]; }
 void Save6::setPartyCount(int n) { data_[layout_.party + 6 * PK6_PARTY_SIZE] = uint8_t(n); }
 PK6 Save6::partySlot(int i) const { return PK6::decrypt(&data_[layout_.party + i * PK6_PARTY_SIZE], PK6_PARTY_SIZE); }

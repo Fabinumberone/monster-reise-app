@@ -10,6 +10,7 @@
 
 #include "../core/bank.hpp"
 #include "../core/convert.hpp"
+#include "../core/items.hpp"
 #include "../core/memecrypto.hpp"
 #include "../core/save6.hpp"
 #include "../core/save7.hpp"
@@ -30,7 +31,8 @@ static const char* USAGE =
     "  pw3d-reise signieren <main> <ausgabe>  (Gen 7, Test)\n"
     "  pw3d-reise speicher-neu <speicher> <startspiel> [weitere …]\n"
     "  pw3d-reise speicher-info <speicher>\n"
-    "  pw3d-reise reise <speicher> <von> <nach>\n";
+    "  pw3d-reise reise <speicher> <von> <nach>\n"
+    "  pw3d-reise speicher-items <speicher> <spielstände …>  (Items einmalig dazulegen)\n";
 
 static bool readFile(const std::string& path, std::vector<uint8_t>& out) {
     std::ifstream f(path, std::ios::binary);
@@ -106,8 +108,11 @@ static int cmdInfo(const SaveFile& sav, bool showBlocks) {
     std::printf("\nTrainer: \"%s\"  TID %05u  SID %05u  Geschlecht %u", t.name.c_str(), t.tid, t.sid, t.gender);
     if (sav.generation() == 7) {
         uint32_t id7 = (uint32_t(t.sid) << 16 | t.tid) % 1000000;
-        std::printf("  (Anzeige-ID %06u)  Geld %u", unsigned(id7), unsigned(static_cast<const Save7&>(sav).money()));
+        std::printf("  (Anzeige-ID %06u)", unsigned(id7));
     }
+    std::printf("  Geld %u\nReisende Items:", unsigned(sav.money()));
+    for (const ItemStack& s : readTravelItems(sav))
+        std::printf(" %u×%u(%s)", s.item, s.count, pouchName(pouchOf(sav.kind(), s.item)));
     std::printf("\n\nTeam (%d):\n", sav.partyCount());
     for (int i = 0; i < sav.partyCount() && i < 6; i++) {
         char lbl[16];
@@ -274,7 +279,15 @@ static void printBank(const Bank& bank) {
     std::printf("Gemeinsamer Speicher: Trainer \"%s\" %05u/%05u, %d Pokémon, aktuelles Spiel: %s\n",
                 bank.trainer.name.c_str(), bank.trainer.tid, bank.trainer.sid, bank.count(),
                 bank.current.empty() ? "keins" : bank.current.c_str());
-    auto line = [](const char* lbl, const BankEntry& e) {
+    if (bank.moneyKnown) std::printf("Geld: %u\n", unsigned(bank.money));
+    else std::printf("Geld: noch nicht übernommen (wird bei der nächsten Abreise gelesen)\n");
+    std::printf("Items:");
+    for (const BankItem& b : bank.items) {
+        std::printf(" %u×%u", b.item, unsigned(b.count));
+        if (b.written < b.count) std::printf("(%u sichtbar)", b.written);
+    }
+    std::printf("\n");
+    auto line =[](const char* lbl, const BankEntry& e) {
         printPk(lbl, e.pk);
         std::printf("           %s%s  passt in: %s%s%s%s\n", e.inGame ? "im Spiel" : "nur im Speicher",
                     e.hasGen6 ? ", Gen-6-Stand vorhanden" : "", fitsIn(e.pk, GameKind::XY) ? "XY " : "",
@@ -360,6 +373,31 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
+    if (cmd == "item" && argc == 5) { // Test: Item in die passende reisende Tasche legen
+        auto s = open(argv[2], true);
+        if (!s) return 1;
+        auto list = readTravelItems(*s);
+        list.push_back({uint16_t(std::atoi(argv[3])), uint16_t(std::atoi(argv[4]))});
+        std::vector<uint16_t> written;
+        writeTravelItems(*s, list, written);
+        if (!written.back()) { std::fprintf(stderr, "Item passt in diesem Spiel in keine reisende Tasche\n"); return 1; }
+        if (!writeSave(argv[2], *s)) return 1;
+        std::printf("Item %s × %s hinzugefügt\n", argv[3], argv[4]);
+        return 0;
+    }
+    if (cmd == "speicher-items" && argc >= 4) { // Items weiterer Spielstände einmalig dazulegen
+        Bank bank;
+        std::string err;
+        if (!bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        for (int i = 3; i < argc; i++) {
+            auto s = open(argv[i], true);
+            if (!s) return 1;
+            bank.addItemsFrom(*s);
+        }
+        if (!bank.save(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        printBank(bank);
+        return 0;
+    }
     std::fputs(USAGE, stderr);
     return 1;
 }

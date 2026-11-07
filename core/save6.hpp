@@ -36,6 +36,8 @@ public:
 
     Trainer6 trainer() const override;
     void setTrainer(const Trainer6& t) override;
+    uint32_t money() const override;      // Misc-Block 0x4200 + 8 (XY und ORAS)
+    void setMoney(uint32_t v) override;
 
     int partyCount() const override;
     void setPartyCount(int n) override;
