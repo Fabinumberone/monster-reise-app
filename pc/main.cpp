@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../core/save6.hpp"
+#include "../core/memecrypto.hpp"
 #include "../core/save7.hpp"
 
 using namespace pw3d;
@@ -75,7 +76,10 @@ static int cmdInfo7(const Save7& sav) {
         std::printf("  Block %04X  @0x%05X  Länge 0x%05X  CRC %04X/%04X %s\n", b.id, unsigned(b.offset),
                     unsigned(b.length), b.storedCrc, b.computedCrc, b.ok() ? "ok" : "FALSCH");
     }
-    std::printf("%zu Blöcke, %d mit falscher Prüfsumme\n\n", sav.blocks().size(), bad);
+    std::printf("%zu Blöcke, %d mit falscher Prüfsumme\n", sav.blocks().size(), bad);
+    bool sigOk = verifySave7(sav.raw());
+    std::printf("Signatur: %s\n\n", sigOk ? "gültig" : "UNGÜLTIG");
+    if (!sigOk) bad++;
     auto t = sav.trainer();
     std::printf("Trainer: \"%s\"  TID %05u  SID %05u  Geschlecht %u  Geld %u\n\n", t.name.c_str(), t.tid, t.sid,
                 t.gender, unsigned(sav.money()));
@@ -232,13 +236,24 @@ int main(int argc, char** argv) {
             return 1;
         }
         if (cmd == "info") return cmdInfo7(s7);
+        if (cmd == "signieren" && argc == 4) { // Test: neu signieren und unter anderem Namen speichern
+            signSave7(s7.raw());
+            std::ofstream f(argv[3], std::ios::binary | std::ios::trunc);
+            f.write(reinterpret_cast<const char*>(s7.raw().data()), std::streamsize(s7.raw().size()));
+            std::printf("Signiert nach %s, Signatur %s\n", argv[3], verifySave7(s7.raw()) ? "gültig" : "UNGÜLTIG");
+            return f ? 0 : 1;
+        }
         if (cmd == "geld" && argc == 4) {
             if (!s7.checksumsValid()) { std::fprintf(stderr, "Prüfsummen stimmen schon vorher nicht, Abbruch\n"); return 1; }
             uint32_t old = s7.money();
             s7.setMoney(uint32_t(std::strtoul(argv[3], nullptr, 10)));
             s7.updateChecksums();
+            signSave7(s7.raw()); // nach den Prüfsummen, denn die Signatur deckt die Blocktabelle ab
             Save7 check;
-            if (!check.load(s7.raw(), err7) || !check.checksumsValid()) { std::fprintf(stderr, "Gegenprobe fehlgeschlagen\n"); return 1; }
+            if (!check.load(s7.raw(), err7) || !check.checksumsValid() || !verifySave7(check.raw())) {
+                std::fprintf(stderr, "Gegenprobe fehlgeschlagen\n");
+                return 1;
+            }
             std::ofstream f(argv[2], std::ios::binary | std::ios::trunc);
             f.write(reinterpret_cast<const char*>(s7.raw().data()), std::streamsize(s7.raw().size()));
             if (!f) { std::fprintf(stderr, "Schreiben fehlgeschlagen\n"); return 1; }
