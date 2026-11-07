@@ -24,7 +24,7 @@ static const char* USAGE =
     "  pw3d-reise pokedex <main>              alle Pokémon im Pokédex eintragen\n"
     "  pw3d-reise trainer <quelle> <ziel>     Ziel übernimmt Trainer der Quelle\n"
     "  pw3d-reise kopiere <quelle> <teamplatz> <ziel> <box> <platz>\n"
-    "  pw3d-reise insteam <quelle> <teamplatz> <ziel>\n"
+    "  pw3d-reise insteam <quelle> <teamplatz> <ziel> [erwartete Art]\n"
     "  pw3d-reise geld <main> <betrag>        (Gen 7)\n"
     "  pw3d-reise signieren <main> <ausgabe>  (Gen 7, Test)\n";
 
@@ -194,11 +194,16 @@ static int cmdKopiere(char** a) {
     return 0;
 }
 
-static int cmdInsTeam(char** a) {
+// insteam <quelle> <teamplatz> <ziel> [art]: optional Abbruch, wenn auf dem Platz eine andere Art steht.
+static int cmdInsTeam(char** a, const char* expectSpecies) {
     auto src = open(a[0], true), dst = open(a[2], true);
     if (!src || !dst) return 1;
     PK6 pk;
     if (!takeFromParty(*src, std::atoi(a[1]) - 1, *dst, pk)) return 1;
+    if (expectSpecies && pk.species() != std::atoi(expectSpecies)) {
+        std::fprintf(stderr, "Auf Teamplatz %s steht Art %u, erwartet %s. Abbruch\n", a[1], pk.species(), expectSpecies);
+        return 1;
+    }
     if (!dst->addToParty(pk)) {
         std::fprintf(stderr, "Team im Ziel ist voll\n");
         return 1;
@@ -270,7 +275,7 @@ int main(int argc, char** argv) {
     if (cmd == "pokedex" && argc == 3) return cmdPokedex(argv[2]);
     if (cmd == "trainer" && argc == 4) return cmdTrainer(argv[2], argv[3]);
     if (cmd == "kopiere" && argc == 7) return cmdKopiere(argv + 2);
-    if (cmd == "insteam" && argc == 5) return cmdInsTeam(argv + 2);
+    if (cmd == "insteam" && (argc == 5 || argc == 6)) return cmdInsTeam(argv + 2, argc == 6 ? argv[5] : nullptr);
     if (cmd == "geld" && argc == 4) return cmdGeld(argv[2], argv[3]);
     if (cmd == "signieren" && argc == 4) return cmdSignieren(argv[2], argv[3]);
     std::fputs(USAGE, stderr);
