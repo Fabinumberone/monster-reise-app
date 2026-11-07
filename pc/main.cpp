@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../core/save6.hpp"
+#include "../core/save7.hpp"
 
 using namespace pw3d;
 
@@ -62,6 +63,33 @@ static int cmdInfo(Save6& sav) {
             std::snprintf(lbl, sizeof lbl, "B%02d/%02d", b + 1, s + 1);
             printPk(lbl, sav.boxSlot(b, s));
         }
+    std::printf("  %d Pokémon in %d Boxen\n", boxed, sav.boxCount());
+    return bad ? 2 : 0;
+}
+
+static int cmdInfo7(const Save7& sav) {
+    std::printf("Spiel: %s, %zu Byte\n", gameName(sav.game()), sav.raw().size());
+    int bad = 0;
+    for (auto& b : sav.blocks()) {
+        if (!b.ok()) bad++;
+        std::printf("  Block %04X  @0x%05X  Länge 0x%05X  CRC %04X/%04X %s\n", b.id, unsigned(b.offset),
+                    unsigned(b.length), b.storedCrc, b.computedCrc, b.ok() ? "ok" : "FALSCH");
+    }
+    std::printf("%zu Blöcke, %d mit falscher Prüfsumme\n\n", sav.blocks().size(), bad);
+    auto t = sav.trainer();
+    std::printf("Trainer: \"%s\"  TID %05u  SID %05u  Geschlecht %u  Geld %u\n\n", t.name.c_str(), t.tid, t.sid,
+                t.gender, unsigned(sav.money()));
+    std::printf("Team (%d):\n", sav.partyCount());
+    for (int i = 0; i < sav.partyCount() && i < 6; i++) {
+        PK6 pk = sav.partySlot(i);
+        printPk("", pk);
+        std::printf("           Level %u\n", pk.partyLevel());
+    }
+    int boxed = 0;
+    std::printf("\nBoxen:\n");
+    for (int b = 0; b < sav.boxCount(); b++)
+        for (int s = 0; s < Save7::BOX_SLOTS; s++)
+            if (!sav.boxSlotEmpty(b, s)) { boxed++; printPk("", sav.boxSlot(b, s)); }
     std::printf("  %d Pokémon in %d Boxen\n", boxed, sav.boxCount());
     return bad ? 2 : 0;
 }
@@ -194,6 +222,30 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> data;
     if (!readFile(argv[2], data)) {
         std::fprintf(stderr, "Kann %s nicht lesen\n", argv[2]);
+        return 1;
+    }
+    if (data.size() != 0x65600 && data.size() != 0x76000) {
+        Save7 s7;
+        std::string err7;
+        if (!s7.load(std::move(data), err7)) {
+            std::fprintf(stderr, "Fehler: %s\n", err7.c_str());
+            return 1;
+        }
+        if (cmd == "info") return cmdInfo7(s7);
+        if (cmd == "geld" && argc == 4) {
+            if (!s7.checksumsValid()) { std::fprintf(stderr, "Prüfsummen stimmen schon vorher nicht, Abbruch\n"); return 1; }
+            uint32_t old = s7.money();
+            s7.setMoney(uint32_t(std::strtoul(argv[3], nullptr, 10)));
+            s7.updateChecksums();
+            Save7 check;
+            if (!check.load(s7.raw(), err7) || !check.checksumsValid()) { std::fprintf(stderr, "Gegenprobe fehlgeschlagen\n"); return 1; }
+            std::ofstream f(argv[2], std::ios::binary | std::ios::trunc);
+            f.write(reinterpret_cast<const char*>(s7.raw().data()), std::streamsize(s7.raw().size()));
+            if (!f) { std::fprintf(stderr, "Schreiben fehlgeschlagen\n"); return 1; }
+            std::printf("Geld %u -> %u\n", unsigned(old), unsigned(s7.money()));
+            return 0;
+        }
+        std::fprintf(stderr, "Befehl für Gen 7 nicht verfügbar: %s\n", cmd.c_str());
         return 1;
     }
     Save6 sav;
