@@ -113,7 +113,8 @@ enum class Screen { Menu, Travel, Confirm, Busy, Done, Error };
 enum class View { Team, PC, Bag };
 
 struct State {
-    Bank bank;
+    Bank bank;   // gemeinsamer Speicher (wie gespeichert)
+    Bank shown;  // Anzeige: Speicher plus aktueller Spielstand (Vorschau einer Abreise)
     bool bankOk = false;
     std::string bankErr;
     std::vector<const Game*> installed;
@@ -143,6 +144,36 @@ void writeLast(u32 lowId) {
     std::fclose(f);
 }
 
+GBContext gbCtx(const Game& g, const Trainer6& t) {
+    GBContext c;
+    c.species = &g_species;
+    c.names = &g_names;
+    c.trainer = t;
+    c.gen = g.gen;
+    c.version = g.gbVersion;
+    c.language = g.language;
+    return c;
+}
+
+// Vorschau: so, als würde man jetzt aus dem aktuellen Spiel abreisen (Speicher bleibt unverändert).
+void makePreview(State& st) {
+    st.shown = st.bank;
+    if (!st.current) return;
+    std::vector<u8> data;
+    std::string err;
+    if (!readSave(*st.current, data, err)) return;
+    Bank b = st.bank;
+    if (st.current->gen <= 2) {
+        SaveGB s;
+        if (!g_species.loaded() || !s.load(data, err) || !s.checksumValid()) return;
+        if (!b.departGB(s, gbCtx(*st.current, b.trainer), err)) return;
+    } else {
+        auto s = openSave(data, err);
+        if (!s || !s->valid() || !b.depart(*s, err)) return;
+    }
+    st.shown = b;
+}
+
 void loadState(State& st) {
     g_names.load(NAMES);
     g_species.load(SPECIES);
@@ -158,6 +189,7 @@ void loadState(State& st) {
     if (!st.current)
         for (const Game* g : st.installed)
             if (st.bank.current == bankKind(*g)) { st.current = g; break; }
+    makePreview(st);
 }
 
 // Ist das Pokémon im aktuellen Spiel sichtbar?
@@ -205,16 +237,16 @@ void drawHeader(const State& st) {
     }
     rect(0, 26, 400, 18, C_BG2);
     if (st.bankOk) {
-        const Trainer6& t = st.bank.trainer;
-        text(t.name + "   ID " + std::to_string(t.tid) + "   Geld " + money(st.bank.money), 8, 28, 0.45f, C_LIGHT);
-        text(std::to_string(st.bank.count()) + " Pokémon", 392, 28, 0.45f, C_LIGHT, RIGHT);
+        const Trainer6& t = st.shown.trainer;
+        text(t.name + "   ID " + std::to_string(t.tid) + "   Geld " + money(st.shown.money), 8, 28, 0.45f, C_LIGHT);
+        text(std::to_string(st.shown.count()) + " Pokémon", 392, 28, 0.45f, C_LIGHT, RIGHT);
     }
 }
 
 void drawTeam(const State& st) {
     int n = 0;
     for (int i = 0; i < Bank::PARTY; i++) {
-        const BankEntry& e = st.bank.party[i];
+        const BankEntry& e = st.shown.party[i];
         if (!e.used) continue;
         float x = 8 + (n % 2) * 196, y = 50 + (n / 2) * 62;
         n++;
@@ -246,14 +278,14 @@ void drawPC(const State& st) {
     text("◀  Box " + std::to_string(st.box + 1) + "  ▶", 146, 48, 0.55f, C_WHITE, CENTER);
     text("L / R", 146, 66, 0.38f, C_LIGHT, CENTER);
     for (int s = 0; s < Bank::SLOTS; s++) {
-        const BankEntry& e = st.bank.boxes[st.box * Bank::SLOTS + s];
+        const BankEntry& e = st.shown.boxes[st.box * Bank::SLOTS + s];
         float x = 8 + (s % 6) * 46, y = 82 + (s / 6) * 31;
         rect(x, y, 44, 29, C_BG2);
         if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !visibleHere(st, e.pk));
         if (s == st.cursor) frame(x, y, 44, 29, C_SEL);
     }
     // Detailansicht rechts
-    const BankEntry& sel = st.bank.boxes[st.box * Bank::SLOTS + st.cursor];
+    const BankEntry& sel = st.shown.boxes[st.box * Bank::SLOTS + st.cursor];
     rect(290, 48, 102, 188, C_CARD);
     if (!sel.used) {
         text("leer", 341, 130, 0.5f, C_MUTED, CENTER);
@@ -275,11 +307,11 @@ constexpr int BAG_ROWS = 10;
 void drawBag(const State& st) {
     text("Beutel", 8, 48, 0.55f, C_WHITE);
     text("nur Taschen, die mitreisen", 392, 50, 0.4f, C_LIGHT, RIGHT);
-    if (st.bank.items.empty()) { text("leer", 200, 130, 0.6f, C_LIGHT, CENTER); return; }
+    if (st.shown.items.empty()) { text("leer", 200, 130, 0.6f, C_LIGHT, CENTER); return; }
     for (int r = 0; r < BAG_ROWS; r++) {
         int i = st.bagScroll + r;
-        if (i >= int(st.bank.items.size())) break;
-        const BankItem& b = st.bank.items[size_t(i)];
+        if (i >= int(st.shown.items.size())) break;
+        const BankItem& b = st.shown.items[size_t(i)];
         const char* place = itemPlaceHere(st, b.item);
         float y = 70 + r * 17;
         rect(8, y, 384, 16, r % 2 ? C_BG2 : C_BG);
@@ -288,7 +320,7 @@ void drawBag(const State& st) {
         text("× " + std::to_string(b.count), 280, y + 1, 0.45f, c, RIGHT);
         text(place ? place : "hier nicht sichtbar", 386, y + 2, 0.4f, place ? C_LIGHT : C_ERR, RIGHT);
     }
-    if (st.bank.items.size() > size_t(BAG_ROWS))
+    if (st.shown.items.size() > size_t(BAG_ROWS))
         text("▲▼ blättern", 392, 242 - 18, 0.38f, C_LIGHT, RIGHT);
 }
 
@@ -464,16 +496,7 @@ bool travel(State& st, std::string& err) {
     };
     if (!openAny(from, fromData, fromSav, fromGB) || !openAny(to, toData, toSav, toGB)) return false;
     if ((from.gen <= 2 || to.gen <= 2) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
-    auto ctxFor = [&](const Game& g) {
-        GBContext c;
-        c.species = &g_species;
-        c.names = &g_names;
-        c.trainer = st.bank.trainer;
-        c.gen = g.gen;
-        c.version = g.gbVersion;
-        c.language = g.language;
-        return c;
-    };
+    auto ctxFor = [&](const Game& g) { return gbCtx(g, st.bank.trainer); };
 
     step("Lege Sicherungen an");
     mkdir(DIR, 0777);
@@ -520,6 +543,7 @@ bool travel(State& st, std::string& err) {
     if (!bank.save(BANK, err)) { err = "Spielstand geschrieben, aber Speicher nicht: " + err; return false; }
     writeLast(to.lowId);
     st.bank = bank;
+    st.shown = bank;
     st.current = &to;
 
     st.message = std::to_string(bank.count()) + " Pokémon im Speicher, " + std::to_string(hidden) + " davon in " + to.name +
@@ -573,7 +597,7 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (down & KEY_DUP) st.cursor = (st.cursor + Bank::SLOTS - 6) % Bank::SLOTS;
         }
         if (st.view == View::Bag) {
-            int maxScroll = std::max(0, int(st.bank.items.size()) - BAG_ROWS);
+            int maxScroll = std::max(0, int(st.shown.items.size()) - BAG_ROWS);
             if (down & KEY_DDOWN) st.bagScroll = std::min(maxScroll, st.bagScroll + 1);
             if (down & KEY_DUP) st.bagScroll = std::max(0, st.bagScroll - 1);
         }
