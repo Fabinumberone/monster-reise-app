@@ -75,10 +75,17 @@ offsets.forEach((v, s) => header.writeUInt32LE(v, 16 + s * 4));
 const tab = Buffer.concat(tabParts);
 const pad = Buffer.alloc((4 - (tab.length % 4)) % 4);
 
+// Vertikal spiegeln: Die GPU liest die erste Speicherzeile als v = 1 (oben), encodeRgba5551 legt
+// aber die untere Bildzeile zuerst ab. In Azahar bestätigt (ohne Spiegelung kopfüber).
+function flipV(px, w, h) {
+  const out = Buffer.alloc(px.length);
+  for (let y = 0; y < h; y++) px.copy(out, (h - 1 - y) * w * 4, y * w * 4, (y + 1) * w * 4);
+  return out;
+}
 const pics = icons.map(e => {
   let d = e[0];
   if (d[0] === 0x11) d = lz11(d);
-  return encodeRgba5551(rotateCCW(decodeRgba5551(d, 32, 64), 32, 64), 64, 32);
+  return encodeRgba5551(flipV(rotateCCW(decodeRgba5551(d, 32, 64), 32, 64), 64, 32), 64, 32);
 });
 const lenField = Buffer.alloc(4);
 lenField.writeUInt32LE(tab.length + pad.length);

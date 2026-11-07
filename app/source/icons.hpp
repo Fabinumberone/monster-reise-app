@@ -25,7 +25,7 @@ private:
     u16 iconCount_ = 0;
     std::vector<C3D_Tex*> tex_;
     std::vector<C2D_Image> img_;
-    // Die GPU liest die erste Speicherzeile als v = 1; unsere Daten beginnen mit der unteren
-    // Bildzeile, also liegt die obere Bildzeile bei v = 0 (in Azahar bestätigt: sonst kopfüber).
-    Tex3DS_SubTexture sub_{40, 30, 12.0f / 64, 0.0f, 52.0f / 64, 30.0f / 32};
+    // Ausschnitt mit oben > unten (sonst deutet citro2d die Textur als um 90° gedreht).
+    // Die erste Speicherzeile liegt bei v = 1, daher legt gen-icons.mjs die obere Bildzeile zuerst ab.
+    Tex3DS_SubTexture sub_{40, 30, 12.0f / 64, 1.0f, 52.0f / 64, 1.0f - 30.0f / 32};
 };
