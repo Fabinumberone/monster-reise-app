@@ -16,6 +16,7 @@
 #include "../core/gbconvert.hpp"
 #include "../core/gen3tables.hpp"
 #include "../core/nds.hpp"
+#include "../core/ndsconvert.hpp"
 #include "../core/species.hpp"
 #include "../core/items.hpp"
 #include "../core/names.hpp"
@@ -367,6 +368,40 @@ static std::string splitLang(const std::string& arg, uint8_t& lang) {
     return arg;
 }
 
+static bool isNDSFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    auto n = f ? f.tellg() : std::streampos(0);
+    return n >= 0x80000 && n <= 0x80100;
+}
+
+static bool loadNDS(const std::string& path, SaveNDS& s) {
+    std::vector<uint8_t> data;
+    std::string err;
+    if (!readFile(path, data) || !s.load(std::move(data), err)) { std::fprintf(stderr, "%s: %s\n", path.c_str(), err.c_str()); return false; }
+    if (!s.checksumsValid()) { std::fprintf(stderr, "%s: Prüfsummen stimmen schon vorher nicht\n", path.c_str()); return false; }
+    return true;
+}
+
+static NDSContext makeNdsCtx(const SaveNDS& s, const Trainer6& trainer) {
+    NDSContext c;
+    c.species = &g_species;
+    c.names = &g_names;
+    c.trainer = trainer;
+    c.game = s.game();
+    c.version = ndsOriginVersion(s);
+    return c;
+}
+
+static bool writeNDS(const std::string& path, SaveNDS& s) {
+    s.finalize();
+    SaveNDS check;
+    std::string err;
+    if (!check.load(s.raw(), err) || !check.checksumsValid()) { std::fprintf(stderr, "Gegenprobe fehlgeschlagen, nichts geschrieben\n"); return false; }
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(s.raw().data()), std::streamsize(s.raw().size()));
+    return bool(f);
+}
+
 static bool isGBAFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     auto n = f ? f.tellg() : std::streampos(0);
@@ -450,6 +485,11 @@ static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg
     std::string fromTitle, toTitle;
     if (fromPath == "-") { // kein aktuelles Spiel (neuer Speicher)
         fromTitle = "keinem Spiel";
+    } else if (isNDSFile(fromPath)) {
+        SaveNDS from;
+        if (!loadNDS(fromPath, from)) return 1;
+        if (!bank.departNDS(from, makeNdsCtx(from, bank.trainer), err)) { std::fprintf(stderr, "Abreise: %s\n", err.c_str()); return 1; }
+        fromTitle = ndsGameName(from.game());
     } else if (isGBAFile(fromPath)) {
         SaveGBA from;
         if (!loadGBA(fromPath, from)) return 1;
@@ -467,7 +507,13 @@ static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg
         fromTitle = from->gameTitle();
     }
     int hidden = 0;
-    if (isGBAFile(toPath)) {
+    if (isNDSFile(toPath)) {
+        SaveNDS to;
+        if (!loadNDS(toPath, to)) return 1;
+        if (!bank.arriveNDS(to, makeNdsCtx(to, bank.trainer), hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
+        if (!writeNDS(toPath, to)) return 1;
+        toTitle = ndsGameName(to.game());
+    } else if (isGBAFile(toPath)) {
         SaveGBA to;
         if (!loadGBA(toPath, to)) return 1;
         if (!bank.arriveGBA(to, makeGbaCtx(to, bank.trainer), hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
@@ -517,7 +563,12 @@ static int cmdAbgleich(int argc, char** argv) {
         for (auto& c : q) if (c == '\\') c = '/';
         size_t t = q.find("/00040000/");
         if (t != std::string::npos) s.lowId = uint32_t(std::strtoul(q.substr(t + 10, 8).c_str(), nullptr, 16));
-        if (isGBAFile(p)) {
+        if (isNDSFile(p)) {
+            SaveNDS g;
+            if (!loadNDS(p, g)) return 1;
+            s.gen = g.generation();
+            s.gbVersion = ndsOriginVersion(g);
+        } else if (isGBAFile(p)) {
             SaveGBA g;
             if (!loadGBA(p, g)) return 1;
             s.gen = 3;
@@ -618,6 +669,30 @@ static int cmdInfoNDS(const std::string& path) {
         std::printf("\n");
     }
     return 0;
+}
+
+// Test: alles lesen und unverändert zurückschreiben, muss bytegleich sein (Spielstand bleibt unberührt).
+static int cmdNdsRoundtrip(const std::string& path) {
+    std::vector<uint8_t> data;
+    std::string err;
+    SaveNDS s;
+    if (!readFile(path, data) || !s.load(data, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    s.setParty(s.party());
+    for (int b = 0; b < s.boxCount(); b++)
+        for (int i = 0; i < SaveNDS::SLOTS; i++) {
+            PK45 pk = s.boxSlot(b, i);
+            s.setBoxSlot(b, i, pk.pid() || pk.checksum() ? &pk : nullptr);
+        }
+    for (int p = 0; p < 8; p++)
+        if (s.hasPouch(SaveNDS::Pouch(p))) s.setPouch(SaveNDS::Pouch(p), s.pouch(SaveNDS::Pouch(p)));
+    s.setMoney(s.money());
+    s.setTrainer(s.trainerName(), s.tid(), s.sid(), s.trainerGender());
+    s.finalize();
+    size_t diff = 0, first = 0;
+    for (size_t i = 0; i < data.size(); i++)
+        if (data[i] != s.raw()[i]) { if (!diff) first = i; diff++; }
+    std::printf("%s: %zu Byte verschieden%s\n", path.c_str(), diff, diff ? (" (erstes bei 0x" + [&] { char b[16]; std::snprintf(b, sizeof b, "%zX", first); return std::string(b); }() + ")").c_str() : "");
+    return diff ? 1 : 0;
 }
 
 // ---------- Gen 3 ----------
@@ -741,6 +816,7 @@ int main(int argc, char** argv) {
     }
     if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
     if (cmd == "abgleich" && argc >= 4) return cmdAbgleich(argc, argv);
+    if (cmd == "nds-rundlauf" && argc == 3) return cmdNdsRoundtrip(argv[2]);
     if (cmd == "item" && argc == 5) { // Test: Item in die passende reisende Tasche legen
         auto s = open(argv[2], true);
         if (!s) return 1;

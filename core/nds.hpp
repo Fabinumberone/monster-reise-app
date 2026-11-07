@@ -56,8 +56,10 @@ struct PK45 {
 PK45 pk45Decrypt(const uint8_t* raw, int gen, bool party);
 void pk45Encrypt(const PK45& pk, uint8_t* raw); // Prüfsumme muss gesetzt sein
 
-// Zeichenkette Gen 4 (eigener Zeichensatz) bzw. Gen 5 (UTF-16), bis 0xFFFF.
+// Zeichenkette Gen 4 (eigener Zeichensatz) bzw. Gen 5 (UTF-16), bis 0xFFFF; und zurück
+// (maxChars inkl. Ende-Zeichen 0xFFFF, Rest 0).
 std::string ndsString(const uint8_t* s, size_t maxChars, int gen);
+void ndsEncodeString(const std::string& utf8, uint8_t* out, size_t maxChars, int gen);
 
 struct NDSItem {
     uint16_t id = 0; // heutige Nummer (Gen 4/5 nutzen sie schon)
@@ -87,6 +89,15 @@ public:
     enum class Pouch { Items, Key, TMs, Mail, Medicine, Berries, Balls, Battle };
     bool hasPouch(Pouch p) const;
     std::vector<NDSItem> pouch(Pouch p) const;
+    int pouchCapacity(Pouch p) const { return pouchInfo(p).count; }
+
+    // Schreiben (finalize() danach: Prüfsummen)
+    void setParty(const std::vector<PK45>& mons);
+    void setBoxSlot(int box, int slot, const PK45* pk); // nullptr = leer
+    void setPouch(Pouch p, const std::vector<NDSItem>& items);
+    void setMoney(uint32_t v);
+    void setTrainer(const std::string& name, uint16_t tid, uint16_t sid, uint8_t gender);
+    void finalize();
 
 private:
     struct PouchInfo { uint32_t ofs; int count; };
@@ -100,5 +111,9 @@ private:
     uint32_t general_ = 0, storage_ = 0;   // Gen 4: Anfang der aktiven Blöcke
     uint32_t generalSize_ = 0, storageSize_ = 0, footer_ = 0x14;
 };
+
+// In welche reisende Tasche gehört das Item in diesem Spiel? (int(SaveNDS::Pouch) oder −1;
+// erzeugt von tools/gen-ndsitems.mjs)
+int ndsTravelPouch(NDSGame g, uint16_t item);
 
 } // namespace pw3d

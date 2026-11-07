@@ -23,6 +23,8 @@
 #include "gba.hpp"
 #include "gbaconvert.hpp"
 #include "gbconvert.hpp"
+#include "nds.hpp"
+#include "ndsconvert.hpp"
 #include "icons.hpp"
 #include "species.hpp"
 #include "items.hpp"
@@ -63,6 +65,8 @@ u32 regionColor(const char* region) {
     if (r == "Kanto") return C2D_Color32(0x4C, 0xA6, 0x4C, 0xFF);
     if (r == "Johto") return C2D_Color32(0x8A, 0x5C, 0xC8, 0xFF);
     if (r == "Hoenn") return C2D_Color32(0xD9, 0x4A, 0x3A, 0xFF);
+    if (r == "Sinnoh") return C2D_Color32(0x5A, 0x7D, 0x9A, 0xFF);
+    if (r == "Einall") return C2D_Color32(0x55, 0x55, 0x5F, 0xFF);
     if (r == "Kalos") return C2D_Color32(0x3B, 0x6F, 0xD9, 0xFF);
     return C2D_Color32(0xE0, 0xA8, 0x22, 0xFF); // Alola
 }
@@ -172,6 +176,16 @@ GBContext gbCtx(const Game& g, const Trainer6& t) {
     return c;
 }
 
+NDSContext ndsCtx(const Game& g, const Trainer6& t) {
+    NDSContext c;
+    c.species = &g_species;
+    c.names = &g_names;
+    c.trainer = t;
+    c.game = NDSGame(g.sub);
+    c.version = g.gbVersion;
+    return c;
+}
+
 GBAContext gbaCtx(const Game& g, const Trainer6& t) {
     GBAContext c;
     c.species = &g_species;
@@ -278,6 +292,7 @@ void loadState(State& st) {
 // Ist das Pokémon im aktuellen Spiel sichtbar?
 bool visibleHere(const State& st, const PK6& pk) {
     if (!st.current) return true;
+    if (st.current->game->gen == 4 || st.current->game->gen == 5) return fitsGen45(pk, NDSGame(st.current->game->sub));
     if (st.current->game->gen == 3) return fitsGen3(pk);
     if (st.current->game->gen <= 2) return fitsGB(pk, st.current->game->gen);
     return fitsIn(pk, st.current->game->kind);
@@ -287,6 +302,8 @@ bool visibleHere(const State& st, const PK6& pk) {
 int gameBoxes(const Game& g) {
     if (g.gen == 1) return 12;
     if (g.gen == 2 || g.gen == 3) return 14;
+    if (g.gen == 4) return 18;
+    if (g.gen == 5) return 24;
     return (g.kind == GameKind::XY || g.kind == GameKind::ORAS) ? 31 : 32;
 }
 
@@ -343,6 +360,17 @@ const char* gameOfVersion(u8 v) {
 // Wo liegt das Item im aktuellen Spiel? nullptr = dort nicht sichtbar.
 const char* itemPlaceHere(const State& st, uint16_t item) {
     if (!st.current) return "";
+    if (st.current->game->gen == 4 || st.current->game->gen == 5) {
+        if (pouchOf(GameKind::USUM, item) == Pouch::None) return nullptr;
+        switch (ndsTravelPouch(NDSGame(st.current->game->sub), item)) {
+        case 0: return "Items";
+        case 4: return "Medizin";
+        case 5: return "Beeren";
+        case 6: return "Bälle";
+        case 7: return "Kampf-Items";
+        default: return nullptr;
+        }
+    }
     if (st.current->game->gen == 3) {
         uint16_t g3 = modernItemToGen3(item);
         if (!g3 || pouchOf(GameKind::USUM, item) == Pouch::None) return nullptr;
@@ -565,9 +593,9 @@ const Button B_EXIT{8, 196, 304, 36}, B_BACK{8, 200, 304, 32};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 
 // Schaltflächen der Regionswahl: fünf Spalten, je Region die installierten Spiele.
-constexpr int NREG = 5;
-const char* REGIONS[NREG] = {"Kanto", "Johto", "Hoenn", "Kalos", "Alola"};
-constexpr float COLW = 60, COLGAP = 3, COLX = 4;
+constexpr int NREG = 7;
+const char* REGIONS[NREG] = {"Kanto", "Johto", "Hoenn", "Sinnoh", "Einall", "Kalos", "Alola"};
+constexpr float COLW = 43, COLGAP = 2.5f, COLX = 4;
 // Ein Knopf je Spiel; gibt es Modul und installierte Fassung, wählt man beim Bestätigen.
 std::vector<std::pair<Button, const Game*>> travelButtons(const State& st) {
     std::vector<std::pair<Button, const Game*>> out;
@@ -683,7 +711,7 @@ void drawBottom(const State& st) {
     case Screen::Done:
         text("Gute Reise!", 160, 4, 0.6f, C_WHITE, CENTER);
         text(st.message, 160, 60, 0.48f, C_WHITE, CENTER, 300);
-        button(B_YES, st.target && st.target->game->gen == 3 ? "Weiter (A)" : "Spiel starten (A)", C_OK, C_WHITE, 0.5f);
+        button(B_YES, st.target && isFileGame(*st.target->game) ? "Weiter (A)" : "Spiel starten (A)", C_OK, C_WHITE, 0.5f);
         button(B_NO, "Menü (B)", C_BG2, C_WHITE, 0.55f);
         break;
     case Screen::Error: {
@@ -749,7 +777,13 @@ bool travel(State& st, std::string& err) {
     std::unique_ptr<SaveFile> fromSav, toSav;
     SaveGB fromGB, toGB;
     SaveGBA fromGBA, toGBA;
-    auto openAny = [&](const SaveSlot& s, const std::vector<u8>& data, std::unique_ptr<SaveFile>& sf, SaveGB& gb, SaveGBA& gba) {
+    SaveNDS fromNDS, toNDS;
+    auto openAny = [&](const SaveSlot& s, const std::vector<u8>& data, std::unique_ptr<SaveFile>& sf, SaveGB& gb, SaveGBA& gba, SaveNDS& nds) {
+        if (s.game->gen == 4 || s.game->gen == 5) {
+            if (!nds.load(data, e)) { err = s.label() + ": " + e; return false; }
+            if (!nds.checksumsValid()) { err = s.label() + ": Prüfsummen stimmen nicht"; return false; }
+            return true;
+        }
         if (s.game->gen == 3) {
             if (!gba.load(data, e)) { err = s.label() + ": " + e; return false; }
             if (!gba.checksumsValid()) { err = s.label() + ": Prüfsummen stimmen nicht"; return false; }
@@ -765,8 +799,8 @@ bool travel(State& st, std::string& err) {
         if (!sf->valid()) { err = s.label() + ": Prüfsummen stimmen nicht"; return false; }
         return true;
     };
-    if ((from && !openAny(*from, fromData, fromSav, fromGB, fromGBA)) || !openAny(to, toData, toSav, toGB, toGBA)) return false;
-    if (((from && from->game->gen <= 3) || to.game->gen <= 3) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
+    if ((from && !openAny(*from, fromData, fromSav, fromGB, fromGBA, fromNDS)) || !openAny(to, toData, toSav, toGB, toGBA, toNDS)) return false;
+    if (((from && from->game->gen <= 5) || to.game->gen <= 5) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
     auto ctxFor = [&](const Game& g) { return gbCtx(g, st.bank.trainer); };
 
     step("Lege Sicherungen an");
@@ -785,12 +819,14 @@ bool travel(State& st, std::string& err) {
     step("Übertrage Pokémon, Items und Geld");
     Bank bank = st.bank;
     if (from && st.synced) bank.leave(); // Stand wurde beim Start übernommen (plus Umräumen in der App)
-    else if (from && (from->game->gen == 3   ? !bank.departGBA(fromGBA, gbaCtx(*from->game, st.bank.trainer), err)
+    else if (from && (from->game->gen == 4 || from->game->gen == 5 ? !bank.departNDS(fromNDS, ndsCtx(*from->game, st.bank.trainer), err)
+                      : from->game->gen == 3   ? !bank.departGBA(fromGBA, gbaCtx(*from->game, st.bank.trainer), err)
                       : from->game->gen <= 2 ? !bank.departGB(fromGB, ctxFor(*from->game), err)
                                              : !bank.depart(*fromSav, err)))
         return false;
     int hidden = 0;
-    if (to.game->gen == 3   ? !bank.arriveGBA(toGBA, gbaCtx(*to.game, bank.trainer), hidden, err)
+    if (to.game->gen == 4 || to.game->gen == 5 ? !bank.arriveNDS(toNDS, ndsCtx(*to.game, bank.trainer), hidden, err)
+        : to.game->gen == 3   ? !bank.arriveGBA(toGBA, gbaCtx(*to.game, bank.trainer), hidden, err)
         : to.game->gen <= 2 ? !bank.arriveGB(toGB, ctxFor(*to.game), hidden, err)
                             : !bank.arrive(*toSav, hidden, err))
         return false;
@@ -799,7 +835,12 @@ bool travel(State& st, std::string& err) {
 
     step(to.game->gen == 7 ? "Berechne Prüfsummen und Signatur" : "Berechne Prüfsummen");
     std::vector<u8> outData;
-    if (to.game->gen == 3) {
+    if (to.game->gen == 4 || to.game->gen == 5) {
+        toNDS.finalize();
+        SaveNDS check;
+        if (!check.load(toNDS.raw(), e) || !check.checksumsValid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
+        outData = toNDS.raw();
+    } else if (to.game->gen == 3) {
         toGBA.finalize();
         SaveGBA check;
         if (!check.load(toGBA.raw(), e) || !check.checksumsValid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
@@ -856,8 +897,8 @@ void doLaunch(State& st) {
     if (launchGame(*st.target)) {
         st.quit = true;
     } else {
-        st.message = st.target->game->gen == 3
-                         ? "Reise erledigt\nStarte jetzt mGBA und lade\n" + st.target->label() + "."
+        st.message = st.target->game->gen == 3   ? "Reise erledigt\nStarte jetzt mGBA und lade\n" + st.target->label() + "."
+                     : isFileGame(*st.target->game) ? "Reise erledigt\nStarte jetzt TWiLight Menu++ und lade\n" + st.target->label() + "."
                          : std::string("Spiel konnte nicht gestartet werden\nDie Reise ist erledigt.\nBitte starte ") +
                                st.target->label() + " selbst.";
         st.screen = Screen::Error;

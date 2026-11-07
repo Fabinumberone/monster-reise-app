@@ -25,11 +25,16 @@ struct Game {
     u8 language = 5;      // Gen 1/2: 2 Englisch, 5 Deutsch
     u8 gbVersion = 0;     // Gen 1/2: Herkunft für Gen 7 (37 Blau, 38 Gelb, 40 Silber, 41 Kristall …);
                           // Gen 3: Herkunft für Pokémon aus späteren Spielen (1 Saphir … 5 Blattgrün)
-    const char* kindName = nullptr; // Gen 3: Kennung im Speicher („GBA-RS“, „GBA-E“, „GBA-FRLG“)
+    const char* kindName = nullptr; // Gen 3–5: Kennung im Speicher („GBA-RS“, „NDS-Pt“ …)
+    u8 sub = 0;                     // Gen 3: GBAGame, Gen 4/5: NDSGame
 };
 
-// Gen-3-Spielstände von mGBA (sdmc:/mGBA/*.sav). saveFile ist der volle Pfad, lowId ein Hash des
-// Dateinamens (Bit 31 gesetzt), gestartet werden sie nicht von der App (mGBA selbst öffnen).
+// Spielstand-Dateien auf der SD (Gen 3–5): saveFile = voller Pfad. Werden nicht von der App
+// gestartet (mGBA bzw. TWiLight Menu++ selbst öffnen).
+inline bool isFileGame(const Game& g) { return g.gen >= 3 && g.gen <= 5; }
+
+// Spielstände von mGBA (sdmc:/mGBA/*.sav, Gen 3) und TWiLight Menu++ (sdmc:/roms/nds favoriten/saves,
+// sdmc:/roms/nds/saves, Gen 4/5). lowId ist ein Hash des Pfads (Bit 31 gesetzt).
 const std::vector<Game>& fileGames();
 // Dateiname des Spielstands (für Sicherungen).
 std::string saveName(const Game& g);

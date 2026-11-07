@@ -88,6 +88,33 @@ std::string ndsString(const uint8_t* s, size_t maxChars, int gen) {
     return out;
 }
 
+void ndsEncodeString(const std::string& s, uint8_t* out, size_t maxChars, int gen) {
+    std::memset(out, 0, maxChars * 2);
+    size_t n = 0, i = 0;
+    while (i < s.size() && n + 1 < maxChars) {
+        size_t len = 1;
+        unsigned char c = s[i];
+        if (c >= 0xF0) len = 4; else if (c >= 0xE0) len = 3; else if (c >= 0xC0) len = 2;
+        std::string ch = s.substr(i, len);
+        i += len;
+        uint16_t code = 0;
+        if (gen == 4) {
+            code = 0x1AC; // ?
+            for (int k = 1; k < kGen4CharCount; k++)
+                if (ch == kGen4Chars[k]) { code = uint16_t(k); break; }
+        } else {
+            uint8_t tmp[8] = {};
+            utf8ToUtf16(ch, tmp, 2);
+            code = rd16(tmp);
+            if (code == 0x2642) code = 0x246D; // ♂
+            else if (code == 0x2640) code = 0x246E; // ♀
+        }
+        wr16(out + n * 2, code);
+        n++;
+    }
+    wr16(out + n * 2, 0xFFFF);
+}
+
 // ---------- PK4/PK5 ----------
 
 uint32_t PK45::pid() const { return rd32(&d[0]); }
@@ -151,7 +178,7 @@ bool SaveNDS::load(std::vector<uint8_t> data, std::string& err) {
     }
     // Gen 4: Größe im Fuß (Ende − 0x0C) muss zur Blockgröße passen
     for (const G4Layout& l : kG4) {
-        for (uint32_t part : {0u, PARTITION}) {
+        for (uint32_t part : {uint32_t(0), PARTITION}) {
             if (rd32(&data_[part + l.gSize - 0x0C]) != l.gSize) continue;
             game_ = l.game;
             generalSize_ = l.gSize;
@@ -232,6 +259,78 @@ SaveNDS::PouchInfo SaveNDS::pouchInfo(Pouch p) const {
     case NDSGame::HGSS: return {general_ + 0x644 + hg[i].ofs, hg[i].count};
     default: return {0x18400 + bw[i].ofs, bw[i].count};
     }
+}
+
+void SaveNDS::setParty(const std::vector<PK45>& mons) {
+    uint32_t o = partyOfs();
+    size_t sz = generation() == 5 ? 220 : 236;
+    size_t n = std::min<size_t>(mons.size(), 6);
+    data_[o - 4] = uint8_t(n);
+    PK45 blank;
+    blank.gen = generation();
+    blank.party = true;
+    for (size_t i = 0; i < 6; i++) {
+        PK45 pk = i < n ? mons[i] : blank;
+        pk.gen = generation();
+        pk.party = true;
+        pk45Encrypt(pk, &data_[o + i * sz]);
+    }
+}
+
+void SaveNDS::setBoxSlot(int box, int slot, const PK45* pk) {
+    PK45 p;
+    if (pk) p = *pk;
+    p.gen = generation();
+    p.party = false;
+    pk45Encrypt(p, &data_[boxOfs(box, slot)]);
+}
+
+void SaveNDS::setPouch(Pouch p, const std::vector<NDSItem>& items) {
+    PouchInfo pi = pouchInfo(p);
+    for (int i = 0; i < pi.count; i++) {
+        uint8_t* q = &data_[pi.ofs + size_t(i) * 4];
+        NDSItem it = size_t(i) < items.size() ? items[size_t(i)] : NDSItem{};
+        wr16(q, it.id);
+        wr16(q + 2, it.id ? it.count : 0);
+    }
+}
+
+void SaveNDS::setMoney(uint32_t v) {
+    v = std::min<uint32_t>(v, 999999);
+    if (generation() == 4) wr32(&data_[trainerOfs() + 0x14], v);
+    else wr32(&data_[game_ == NDSGame::BW ? 0x21200 : 0x21100], v);
+}
+
+void SaveNDS::setTrainer(const std::string& name, uint16_t tid, uint16_t sid, uint8_t gender) {
+    ndsEncodeString(name, &data_[trainerOfs()], 8, generation());
+    wr16(&data_[trainerOfs() + 0x10], tid);
+    wr16(&data_[trainerOfs() + 0x12], sid);
+    if (generation() == 4) data_[trainerOfs() + 0x18] = gender & 1;
+    else data_[0x19400 + 0x21] = gender & 1;
+}
+
+void SaveNDS::finalize() {
+    if (generation() == 4) {
+        for (auto [ofs, size] : {std::pair<uint32_t, uint32_t>{general_, generalSize_}, {storage_, storageSize_}})
+            wr16(&data_[ofs + size - 2], crc16Ccitt(&data_[ofs], size - footer_));
+        return;
+    }
+    // Gen 5: geänderte Blöcke (Boxen, Inventar, Team, Trainer, Geld) + Prüfsummentabelle
+    bool bw = game_ == NDSGame::BW;
+    uint32_t table = bw ? 0x23F00 : 0x25F00, tlen = bw ? 0x8C : 0x94;
+    struct B { uint32_t ofs, len; int idx; };
+    std::vector<B> blocks;
+    for (int i = 0; i < 24; i++) blocks.push_back({0x400 + uint32_t(i) * 0x1000, 0xFF0, i + 1});
+    blocks.push_back({0x18400, bw ? 0x9C0u : 0x9ECu, 25});
+    blocks.push_back({0x18E00, 0x534, 26});
+    blocks.push_back({0x19400, bw ? 0x68u : 0xB0u, 27});
+    blocks.push_back({bw ? 0x21200u : 0x21100u, bw ? 0xECu : 0xF0u, 52});
+    for (const B& b : blocks) {
+        uint16_t c = crc16Ccitt(&data_[b.ofs], b.len);
+        wr16(&data_[b.ofs + b.len + 2], c);
+        wr16(&data_[table + uint32_t(b.idx) * 2], c);
+    }
+    wr16(&data_[table + tlen + 0xE], crc16Ccitt(&data_[table], tlen));
 }
 
 bool SaveNDS::hasPouch(Pouch p) const { return pouchInfo(p).count > 0; }

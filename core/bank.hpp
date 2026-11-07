@@ -18,6 +18,8 @@
 #include "gba.hpp"
 #include "gbaconvert.hpp"
 #include "gbconvert.hpp"
+#include "nds.hpp"
+#include "ndsconvert.hpp"
 #include "savefile.hpp"
 
 namespace pw3d {
@@ -33,6 +35,8 @@ struct BankEntry {
     GBMon gb;
     bool hasGba = false;   // gba enthält den letzten Gen-3-Stand (wie zuletzt geschrieben/gelesen)
     PK3 gba;
+    bool hasNds = false;   // nds enthält den letzten Gen-4/5-Stand
+    PK45 nds;
 };
 
 // Item im gemeinsamen Beutel. written = beim letzten Ankommen ins Spiel geschriebene Anzahl;
@@ -129,6 +133,12 @@ public:
     bool departGBA(const SaveGBA& sav, const GBAContext& ctx, std::string& err, bool stay = false);
     bool arriveGBA(SaveGBA& sav, const GBAContext& ctx, int& hidden, std::string& err);
     IntegrateResult integrateGBA(const SaveGBA& sav, const GBAContext& ctx, uint32_t lowId, uint8_t media, bool forceNew = false);
+
+    // Gen 4/5 (DS-Spielstände). Boxen 1–18 (Gen 4) bzw. 1–24 (Gen 5) = Speicherboxen.
+    // Items: Items, Medizin, Beeren (+ Bälle, Kampf-Items in Gen 4); kein Item-PC.
+    bool departNDS(const SaveNDS& sav, const NDSContext& ctx, std::string& err, bool stay = false);
+    bool arriveNDS(SaveNDS& sav, const NDSContext& ctx, int& hidden, std::string& err);
+    IntegrateResult integrateNDS(const SaveNDS& sav, const NDSContext& ctx, uint32_t lowId, uint8_t media, bool forceNew = false);
 
     // Bekannter Spielstand; record legt ihn an (Trainer wie im Spielstand), ohne Items zu übernehmen.
     BankSlot* slot(uint32_t lowId, uint8_t media);

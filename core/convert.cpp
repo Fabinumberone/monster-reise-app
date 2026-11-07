@@ -117,7 +117,7 @@ bool fitsIn(const PK6& pk, GameKind k) {
     if (pk.ability() > L.ability) return false;
     if (pk.d[0xDC] > L.ball) return false;
     if (pk.version() > L.maxVersion) return false;
-    if (pk.isEgg() && pk.version() >= 1 && pk.version() <= 15) return false; // Eier aus Gen 3 bleiben dort
+    if (pk.isEgg() && pk.version() >= 1 && pk.version() <= 23) return false; // Eier aus Gen 3–5 bleiben dort
     for (int i = 0; i < 4; i++) {
         if (rd16(pk.d.data() + 0x5A + i * 2) > L.move) return false; // Attacken
         if (rd16(pk.d.data() + 0x6A + i * 2) > L.move) return false; // Grundattacken

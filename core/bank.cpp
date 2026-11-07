@@ -41,6 +41,7 @@ BankEntry importMon(const SaveFile& sav, const PK6& game, const BankEntry* prev)
     }
     if (prev && prev->hasGb) { e.hasGb = true; e.gb = prev->gb; e.gbKey = prev->gbKey; } // GB-Stand mitnehmen
     if (prev && prev->hasGba) { e.hasGba = true; e.gba = prev->gba; }                    // Gen-3-Stand mitnehmen
+    if (prev && prev->hasNds) { e.hasNds = true; e.nds = prev->nds; }                    // Gen-4/5-Stand mitnehmen
     return e;
 }
 
@@ -106,6 +107,7 @@ void Bank::remember() {
         insertSorted(seen, monId(e.pk));
         if (e.hasGb) insertSorted(seenGb, gbId(e.gbKey, familyOf(e.gb.species)));
         if (e.hasGba) insertSorted(seen, (uint64_t(e.gba.pid()) << 32) | e.gba.pid()); // in Gen 3 geschriebene PID
+        if (e.hasNds) insertSorted(seen, (uint64_t(e.nds.pid()) << 32) | e.nds.pid()); // in Gen 4/5 geschriebene PID
     };
     for (auto& e : party) add(e);
     for (auto& e : boxes) add(e);
@@ -410,7 +412,7 @@ bool Bank::arrive(SaveFile& sav, int& hidden, std::string& err) {
     t.tid = trainer.tid;
     t.sid = trainer.sid;
     t.name = trainer.name;
-    t.gender = trainer.gender;
+    // Spielergeschlecht bleibt das des Spiels (sonst wechselt die Spielfigur)
     sav.setTrainer(t);
     current = kindName(k);
     return true;
@@ -902,7 +904,7 @@ bool Bank::arriveGBA(SaveGBA& sav, const GBAContext& ctx, int& hidden, std::stri
     sav.setPouch(P::Berries, berries);
     sav.setPouch(P::PC, pc);
     if (moneyKnown) { moneyWritten = std::min<uint32_t>(money, 999999); sav.setMoney(moneyWritten); }
-    sav.setTrainer(gen3TrainerName(trainer.name), trainer.tid, trainer.sid, trainer.gender);
+    sav.setTrainer(gen3TrainerName(trainer.name), trainer.tid, trainer.sid, sav.trainerGender()); // Spielfigur bleibt
     current = gbaKind(sav.game());
     return true;
 }
@@ -974,6 +976,264 @@ IntegrateResult Bank::integrateGBA(const SaveGBA& sav, const GBAContext& ctxIn, 
     return r;
 }
 
+// ---------- Gen 4/5 ----------
+
+namespace {
+
+std::string ndsKind(NDSGame g) {
+    switch (g) {
+    case NDSGame::DP: return "NDS-DP";
+    case NDSGame::Pt: return "NDS-Pt";
+    case NDSGame::HGSS: return "NDS-HGSS";
+    case NDSGame::BW: return "NDS-BW";
+    default: return "NDS-B2W2";
+    }
+}
+
+std::vector<SaveNDS::Pouch> ndsTravelPouches(const SaveNDS& s) {
+    using P = SaveNDS::Pouch;
+    if (s.generation() == 5) return {P::Items, P::Medicine, P::Berries};
+    return {P::Items, P::Medicine, P::Berries, P::Balls, P::Battle};
+}
+
+bool ndsItemTravels(uint16_t item) { return item && pouchOf(GameKind::USUM, item) != Pouch::None; }
+
+std::vector<ItemStack> ndsTravelItems(const SaveNDS& s) {
+    std::vector<ItemStack> out;
+    for (auto p : ndsTravelPouches(s))
+        for (const NDSItem& i : s.pouch(p)) {
+            if (!ndsItemTravels(i.id) || !i.count) continue;
+            bool merged = false;
+            for (auto& o : out)
+                if (o.item == i.id) { o.count = uint16_t(std::min<uint32_t>(o.count + i.count, 0xFFFF)); merged = true; }
+            if (!merged) out.push_back({i.id, i.count});
+        }
+    return out;
+}
+
+bool samePk45(const PK45& a, const PK45& b) { return a.pid() == b.pid() && a.tid() == b.tid() && a.sid() == b.sid(); }
+
+} // namespace
+
+bool Bank::departNDS(const SaveNDS& sav, const NDSContext& ctxIn, std::string& err, bool stay) {
+    std::string kind = ndsKind(sav.game());
+    if (current != kind) {
+        err = "Der Speicher steht in " + (current.empty() ? std::string("keinem Spiel") : current) + ", nicht in " + kind;
+        return false;
+    }
+    NDSContext ctx = ctxIn;
+    ctx.game = sav.game();
+    ctx.gameTid = sav.tid();
+    ctx.gameSid = sav.sid();
+    ctx.gameOt = sav.trainerName();
+    std::vector<const BankEntry*> matched;
+    auto findFor = [&](const PK45& m) -> const BankEntry* {
+        auto free = [&](const BankEntry& e) { return std::find(matched.begin(), matched.end(), &e) == matched.end(); };
+        for (auto& e : party) if (e.used && e.hasNds && samePk45(e.nds, m) && free(e)) return &e;
+        for (auto& e : boxes) if (e.used && e.hasNds && samePk45(e.nds, m) && free(e)) return &e;
+        for (auto& e : party) if (e.used && e.pk.ec() == m.pid() && e.pk.pid() == m.pid() && free(e)) return &e;
+        for (auto& e : boxes) if (e.used && e.pk.ec() == m.pid() && e.pk.pid() == m.pid() && free(e)) return &e;
+        return nullptr;
+    };
+    auto importN = [&](const PK45& m) {
+        const BankEntry* prev = findFor(m);
+        BankEntry e;
+        if (prev) {
+            matched.push_back(prev);
+            e = *prev;
+            if (prev->hasNds && prev->nds.gen == m.gen) mergeGen45(e.pk, m, prev->nds, ctx);
+            else e.pk = gen45ToPk7(m, ctx);
+        } else {
+            e.pk = gen45ToPk7(m, ctx);
+        }
+        e.used = true;
+        e.hasNds = true;
+        e.nds = m;
+        e.inGame = stay;
+        return e;
+    };
+
+    std::array<BankEntry, PARTY> np{};
+    std::vector<BankEntry> nb(BOXES * SLOTS);
+    std::vector<BankEntry> team;
+    for (const PK45& m : sav.party())
+        if (m.present()) team.push_back(importN(m));
+    std::vector<const BankEntry*> overflow;
+    for (int i = 0; i < PARTY; i++) {
+        const auto& e = party[size_t(i)];
+        if (!e.used || e.inGame) continue;
+        if (int(team.size()) < PARTY) team.insert(team.begin() + std::min<size_t>(size_t(i), team.size()), e);
+        else overflow.push_back(&e);
+    }
+    for (size_t i = 0; i < team.size(); i++) np[i] = team[i];
+    for (int b = 0; b < sav.boxCount(); b++)
+        for (int s = 0; s < SLOTS; s++) {
+            PK45 m = sav.boxSlot(b, s);
+            if (m.present()) nb[size_t(b * SLOTS + s)] = importN(m);
+        }
+    auto freeSlot = [&]() -> BankEntry* { for (auto& e : nb) if (!e.used) return &e; return nullptr; };
+    auto keep = [&](const BankEntry& e, BankEntry* pref) {
+        BankEntry* dst = (pref && !pref->used) ? pref : freeSlot();
+        if (!dst) return false;
+        *dst = e;
+        return true;
+    };
+    for (const BankEntry* e : overflow)
+        if (!keep(*e, nullptr)) { err = "Kein Platz mehr für nicht angezeigte Pokémon"; return false; }
+    for (size_t i = 0; i < boxes.size(); i++)
+        if (boxes[i].used && !boxes[i].inGame && !keep(boxes[i], &nb[i])) { err = "Kein Platz mehr für nicht angezeigte Pokémon"; return false; }
+
+    std::vector<BankItem> ni;
+    auto addTo = [&](uint16_t item, uint32_t n) {
+        if (!n) return;
+        for (auto& b : ni) if (b.item == item) { b.count += n; return; }
+        ni.push_back({item, 0, n});
+    };
+    for (const ItemStack& s : ndsTravelItems(sav)) addTo(s.item, s.count);
+    if (stay) for (auto& b : ni) b.written = uint16_t(std::min<uint32_t>(b.count, 0xFFFF));
+    for (auto& b : items) addTo(b.item, b.count - std::min<uint32_t>(b.written, b.count));
+
+    remember();
+    party = np;
+    boxes = nb;
+    items = ni;
+    {
+        uint64_t extra = money > moneyWritten ? money - moneyWritten : 0;
+        money = uint32_t(std::min<uint64_t>(uint64_t(sav.money()) + extra, 9999999));
+        moneyWritten = stay ? sav.money() : 0;
+    }
+    moneyKnown = true;
+    if (!stay) current.clear();
+    return true;
+}
+
+bool Bank::arriveNDS(SaveNDS& sav, const NDSContext& ctxIn, int& hidden, std::string& err) {
+    if (!current.empty()) { err = "Erst aus " + current + " abreisen"; return false; }
+    NDSContext ctx = ctxIn;
+    ctx.game = sav.game();
+    hidden = 0;
+    for (auto& e : party) e.inGame = false;
+    for (auto& e : boxes) e.inGame = false;
+    auto exportN = [&](BankEntry& e) {
+        PK45 m = pk7ToGen45(e.pk, e.hasNds ? &e.nds : nullptr, ctx);
+        e.nds = m;
+        e.hasNds = true;
+        e.inGame = true;
+        return m;
+    };
+    std::vector<PK45> team;
+    for (auto& e : party)
+        if (e.used && fitsGen45(e.pk, sav.game())) team.push_back(exportN(e));
+    if (team.empty()) { err = "Kein Pokémon im Team kann in diesem Spiel existieren"; return false; }
+    sav.setParty(team);
+    for (int b = 0; b < sav.boxCount(); b++)
+        for (int s = 0; s < SLOTS; s++) {
+            BankEntry& e = boxes[size_t(b * SLOTS + s)];
+            if (e.used && fitsGen45(e.pk, sav.game())) {
+                PK45 m = exportN(e);
+                sav.setBoxSlot(b, s, &m);
+            } else {
+                sav.setBoxSlot(b, s, nullptr);
+            }
+        }
+    for (auto& e : party) hidden += e.used && !e.inGame;
+    for (auto& e : boxes) hidden += e.used && !e.inGame;
+
+    // Items: nicht reisende Items bleiben, dann reisende nach Rangfolge in ihre Tasche
+    using P = SaveNDS::Pouch;
+    std::vector<std::vector<NDSItem>> lists(8);
+    for (auto p : ndsTravelPouches(sav))
+        for (const NDSItem& i : sav.pouch(p))
+            if (!ndsItemTravels(i.id)) lists[size_t(p)].push_back(i);
+    std::vector<size_t> order(items.size());
+    for (size_t i = 0; i < order.size(); i++) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return itemPriority(items[a].item) < itemPriority(items[b].item); });
+    for (auto& b : items) b.written = 0;
+    for (size_t idx : order) {
+        BankItem& it = items[idx];
+        int p = ndsTravelPouch(sav.game(), it.item);
+        if (p < 0 || !it.count) continue;
+        auto& dst = lists[size_t(p)];
+        if (int(dst.size()) >= sav.pouchCapacity(P(p))) continue;
+        uint16_t n = uint16_t(std::min<uint32_t>(it.count, 999));
+        dst.push_back({it.item, n});
+        it.written = n;
+    }
+    for (auto p : ndsTravelPouches(sav)) sav.setPouch(p, lists[size_t(p)]);
+    if (moneyKnown) { moneyWritten = std::min<uint32_t>(money, 999999); sav.setMoney(moneyWritten); }
+    sav.setTrainer(ndsTrainerName(trainer.name), trainer.tid, trainer.sid, sav.trainerGender()); // Spielfigur bleibt
+    current = ndsKind(sav.game());
+    return true;
+}
+
+IntegrateResult Bank::integrateNDS(const SaveNDS& sav, const NDSContext& ctxIn, uint32_t lowId, uint8_t media, bool forceNew) {
+    IntegrateResult r;
+    NDSContext ctx = ctxIn;
+    ctx.game = sav.game();
+    ctx.gameTid = sav.tid();
+    ctx.gameSid = sav.sid();
+    ctx.gameOt = sav.trainerName();
+    Trainer6 st{ctx.gameTid, ctx.gameSid, sav.trainerGender(), ctx.gameOt};
+    BankSlot* sl = slot(lowId, media);
+    bool isBank = st.tid == trainer.tid && st.sid == trainer.sid && st.name == ndsTrainerName(trainer.name);
+    r.newSave = forceNew || (!isBank && (!sl || !sameTrainer(sl->trainer, st.tid, st.sid, st.name)));
+    if (!sl) { record(lowId, media, sav.generation(), st); sl = slot(lowId, media); }
+    if (r.newSave) {
+        sl->trainer = st;
+        for (const ItemStack& s : ndsTravelItems(sav)) {
+            BankItem* e = nullptr;
+            for (auto& b : items) if (b.item == s.item) e = &b;
+            if (!e) { items.push_back({s.item, 0, 0}); e = &items.back(); }
+            e->count += s.count;
+        }
+        money = std::min<uint32_t>(money + sav.money(), 9999999);
+        moneyKnown = true;
+    }
+    auto add = [&](const PK45& m, bool fromParty, int box, int s) {
+        if (!m.present()) return;
+        BankEntry* known = nullptr;
+        for (auto& e : party) if (!known && e.used && e.hasNds && samePk45(e.nds, m)) known = &e;
+        for (auto& e : boxes) if (!known && e.used && e.hasNds && samePk45(e.nds, m)) known = &e;
+        PK6 pk = gen45ToPk7(m, ctx);
+        if (!known) known = find(pk);
+        if (known) {
+            if (!known->inGame && known->hasNds && known->nds.gen == m.gen && m.exp() > known->nds.exp()) {
+                mergeGen45(known->pk, m, known->nds, ctx);
+                known->nds = m;
+                r.updated++;
+            }
+            return;
+        }
+        if (contains(seen, monId(pk))) return;
+        if (ownTrainer(m.tid(), m.sid(), m.otName(), false) && !sameTrainer(trainer, pk.tid(), pk.sid(), pk.otName())) {
+            pk.setTid(trainer.tid);
+            pk.setSid(trainer.sid);
+            pk.setOtName(trainer.name);
+            pk.updateChecksum();
+        }
+        BankEntry e;
+        e.used = true;
+        e.pk = pk;
+        e.hasNds = true;
+        e.nds = m;
+        BankEntry* dst = nullptr;
+        if (fromParty) {
+            for (auto& p : party) if (!p.used) { dst = &p; break; }
+        } else if (!boxes[size_t(box * SLOTS + s)].used) {
+            dst = &boxes[size_t(box * SLOTS + s)];
+        }
+        if (!dst) dst = freeBoxSlot(boxes);
+        if (!dst) { r.noRoom++; return; }
+        *dst = e;
+        insertSorted(seen, monId(pk));
+        r.added++;
+    };
+    for (const PK45& m : sav.party()) add(m, true, 0, 0);
+    for (int b = 0; b < sav.boxCount(); b++)
+        for (int s = 0; s < SLOTS; s++) add(sav.boxSlot(b, s), false, b, s);
+    return r;
+}
+
 // ---------- Datei ----------
 // "PW3DBANK", u32 Version 1, Trainer (TID, SID, Geschlecht, 3 frei, Name 26 Byte UTF-16),
 // aktuelles Spiel (16 Byte), dann 6 + 960 Einträge: Flags (1 belegt, 2 im Spiel, 4 Gen-6-Stand),
@@ -983,6 +1243,7 @@ IntegrateResult Bank::integrateGBA(const SaveGBA& sav, const GBAContext& ctxIn, 
 // Version 3 hängt zusätzlich an: u32 Anzahl Gen-1/2-Stände, je Stand u16 Eintrag (0–5 Team,
 // danach Boxplätze), u32 Schlüssel, u8 Generation, u8 Länge, 48 Byte Datensatz, 11 Byte OT-Name,
 // 11 Byte Spitzname (Spiel-Zeichensatz).
+// Version 7 hängt an: u32 Anzahl Gen-4/5-Stände, je u16 Eintrag, u8 Generation, 236 Byte PK4/PK5 (entschlüsselt).
 // Version 6 hängt an: u32 Anzahl Gen-3-Stände, je u16 Eintrag + 100 Byte PK3 (entschlüsselt, feste Blockfolge).
 // Version 5: wie 4, aber 100 statt 32 Boxen.
 // Version 4 hängt zusätzlich an: u32 aktueller Spielstand (untere Title-ID), u8 Medium, 3 frei,
@@ -1001,7 +1262,7 @@ constexpr size_t GBREC = 2 + 4 + 1 + 1 + 48 + 11 + 11;
 std::vector<uint8_t> Bank::serialize() const {
     std::vector<uint8_t> out(HEADER + (PARTY + BOXES * SLOTS) * ENTRY, 0);
     std::memcpy(out.data(), MAGIC, 8);
-    wr32(&out[8], 6);
+    wr32(&out[8], 7);
     wr16(&out[12], trainer.tid);
     wr16(&out[14], trainer.sid);
     out[16] = trainer.gender;
@@ -1100,6 +1361,21 @@ std::vector<uint8_t> Bank::serialize() const {
         wr16(p, gbas[i].first);
         std::memcpy(p + 2, gbas[i].second->gba.d.data(), 100);
     }
+    // Version 7: Gen-4/5-Stände
+    std::vector<std::pair<uint16_t, const BankEntry*>> ndss;
+    for (int i = 0; i < PARTY; i++)
+        if (party[size_t(i)].used && party[size_t(i)].hasNds) ndss.push_back({uint16_t(i), &party[size_t(i)]});
+    for (size_t i = 0; i < boxes.size(); i++)
+        if (boxes[i].used && boxes[i].hasNds) ndss.push_back({uint16_t(PARTY + i), &boxes[i]});
+    tail = out.size();
+    out.resize(tail + 4 + ndss.size() * 239, 0);
+    wr32(&out[tail], uint32_t(ndss.size()));
+    for (size_t i = 0; i < ndss.size(); i++) {
+        uint8_t* p = &out[tail + 4 + i * 239];
+        wr16(p, ndss[i].first);
+        p[2] = uint8_t(ndss[i].second->nds.gen);
+        std::memcpy(p + 3, ndss[i].second->nds.d.data(), 236);
+    }
     return out;
 }
 
@@ -1124,9 +1400,9 @@ bool Bank::load(const std::string& path, std::string& err) {
     const int fileBoxes = version >= 5 ? BOXES : OLD_BOXES;
     const size_t base = HEADER + (PARTY + size_t(fileBoxes) * SLOTS) * ENTRY;
     fileVersion = version;
-    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 6 ||
+    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 7 ||
         (version == 1 && in.size() != base) || (version >= 2 && in.size() < base + 12)) {
-        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 6)";
+        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 7)";
         return false;
     }
     items.clear();
@@ -1229,6 +1505,21 @@ bool Bank::load(const std::string& path, std::string& err) {
                     e->hasGba = true;
                     std::memcpy(e->gba.d.data(), q + 2, 100);
                     e->gba.party = true;
+                }
+            }
+            if (version >= 7) { // Gen-4/5-Stände
+                if (bad(4)) { err = path + ": Teil 7 beschädigt"; return false; }
+                uint32_t n7 = rd32(q);
+                q += 4;
+                if (bad(size_t(n7) * 239)) { err = path + ": Teil 7 beschädigt"; return false; }
+                for (uint32_t i = 0; i < n7; i++, q += 239) {
+                    uint16_t idx = rd16(q);
+                    BankEntry* e = idx < PARTY ? &party[idx] : (size_t(idx - PARTY) < boxes.size() ? &boxes[idx - PARTY] : nullptr);
+                    if (!e || (q[2] != 4 && q[2] != 5)) continue;
+                    e->hasNds = true;
+                    e->nds.gen = q[2];
+                    e->nds.party = true;
+                    std::memcpy(e->nds.d.data(), q + 3, 236);
                 }
             }
         }
