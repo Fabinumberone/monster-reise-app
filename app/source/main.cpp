@@ -18,7 +18,10 @@
 #include "bank.hpp"
 #include "bytes.hpp"
 #include "games.hpp"
+#include "gb.hpp"
+#include "gbconvert.hpp"
 #include "icons.hpp"
+#include "species.hpp"
 #include "items.hpp"
 #include "names.hpp"
 #include "savefile.hpp"
@@ -33,6 +36,7 @@ const char* LAST = "sdmc:/pokemon-world-3d/zuletzt.txt";
 const char* BACKUPS = "sdmc:/pokemon-world-3d/sicherungen";
 const char* NAMES = "sdmc:/pokemon-world-3d/namen.txt";
 const char* ICONS = "sdmc:/pokemon-world-3d/icons.bin";
+const char* SPECIES = "sdmc:/pokemon-world-3d/arten.bin";
 
 // ---------- Farben ----------
 const u32 C_BG = C2D_Color32(0x1E, 0x2A, 0x3A, 0xFF);
@@ -52,6 +56,8 @@ const u32 C_FEMALE = C2D_Color32(0xD9, 0x4A, 0x7A, 0xFF);
 
 u32 regionColor(const char* region) {
     std::string r = region;
+    if (r == "Kanto") return C2D_Color32(0x4C, 0xA6, 0x4C, 0xFF);
+    if (r == "Johto") return C2D_Color32(0x8A, 0x5C, 0xC8, 0xFF);
     if (r == "Hoenn") return C2D_Color32(0xD9, 0x4A, 0x3A, 0xFF);
     if (r == "Kalos") return C2D_Color32(0x3B, 0x6F, 0xD9, 0xFF);
     return C2D_Color32(0xE0, 0xA8, 0x22, 0xFF); // Alola
@@ -61,6 +67,7 @@ u32 regionColor(const char* region) {
 C2D_TextBuf g_buf;
 Names g_names;
 IconSet g_icons;
+SpeciesData g_species;
 
 enum Align { LEFT = C2D_AlignLeft, CENTER = C2D_AlignCenter, RIGHT = C2D_AlignRight };
 
@@ -138,6 +145,7 @@ void writeLast(u32 lowId) {
 
 void loadState(State& st) {
     g_names.load(NAMES);
+    g_species.load(SPECIES);
     g_icons.load(ICONS);
     st.installed.clear();
     for (auto& g : allGames())
@@ -146,13 +154,30 @@ void loadState(State& st) {
     st.current = nullptr;
     if (!st.bankOk) return;
     const Game* last = gameByLowId(readLast());
-    if (last && st.bank.current == kindName(last->kind)) st.current = last;
+    if (last && st.bank.current == bankKind(*last)) st.current = last;
     if (!st.current)
         for (const Game* g : st.installed)
-            if (st.bank.current == kindName(g->kind)) { st.current = g; break; }
+            if (st.bank.current == bankKind(*g)) { st.current = g; break; }
 }
 
-GameKind here(const State& st) { return st.current ? st.current->kind : GameKind::USUM; }
+// Ist das Pokémon im aktuellen Spiel sichtbar?
+bool visibleHere(const State& st, const PK6& pk) {
+    if (!st.current) return true;
+    if (st.current->gen <= 2) return fitsGB(pk, st.current->gen);
+    return fitsIn(pk, st.current->kind);
+}
+
+// Wo liegt das Item im aktuellen Spiel? nullptr = dort nicht sichtbar.
+const char* itemPlaceHere(const State& st, uint16_t item) {
+    if (!st.current) return "";
+    if (st.current->gen == 1) return modernItemToGen1(item) ? "Beutel" : nullptr;
+    if (st.current->gen == 2) {
+        if (!modernItemToGen2(item) || pouchOf(GameKind::USUM, item) == Pouch::None) return nullptr;
+        return (item <= 16 || (item >= 492 && item <= 500)) ? "Ball-Tasche" : "Item-Tasche";
+    }
+    Pouch p = pouchOf(st.current->kind, item);
+    return p == Pouch::None ? nullptr : pouchName(p);
+}
 
 std::string monName(const PK6& pk) {
     if (pk.isEgg()) return "Ei";
@@ -187,14 +212,13 @@ void drawHeader(const State& st) {
 }
 
 void drawTeam(const State& st) {
-    GameKind k = here(st);
     int n = 0;
     for (int i = 0; i < Bank::PARTY; i++) {
         const BankEntry& e = st.bank.party[i];
         if (!e.used) continue;
         float x = 8 + (n % 2) * 196, y = 50 + (n / 2) * 62;
         n++;
-        bool vis = fitsIn(e.pk, k);
+        bool vis = visibleHere(st, e.pk);
         rect(x, y, 188, 58, vis ? C_CARD : C_CARD_DIM);
         drawIcon(e.pk, x + 2, y + 4, 1.0f, !vis);
         text(monName(e.pk), x + 46, y + 3, 0.52f, C_TEXT, LEFT, 110);
@@ -219,14 +243,13 @@ void drawTeam(const State& st) {
 }
 
 void drawPC(const State& st) {
-    GameKind k = here(st);
     text("◀  Box " + std::to_string(st.box + 1) + "  ▶", 146, 48, 0.55f, C_WHITE, CENTER);
     text("L / R", 146, 66, 0.38f, C_LIGHT, CENTER);
     for (int s = 0; s < Bank::SLOTS; s++) {
         const BankEntry& e = st.bank.boxes[st.box * Bank::SLOTS + s];
         float x = 8 + (s % 6) * 46, y = 82 + (s / 6) * 31;
         rect(x, y, 44, 29, C_BG2);
-        if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !fitsIn(e.pk, k));
+        if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !visibleHere(st, e.pk));
         if (s == st.cursor) frame(x, y, 44, 29, C_SEL);
     }
     // Detailansicht rechts
@@ -236,7 +259,7 @@ void drawPC(const State& st) {
         text("leer", 341, 130, 0.5f, C_MUTED, CENTER);
         return;
     }
-    bool vis = fitsIn(sel.pk, k);
+    bool vis = visibleHere(st, sel.pk);
     drawIcon(sel.pk, 301, 52, 2.0f, !vis);
     text(monName(sel.pk), 341, 114, 0.5f, C_TEXT, CENTER, 96);
     if (!sel.pk.isEgg() && g_names.species(sel.pk.species()) != monName(sel.pk))
@@ -250,7 +273,6 @@ void drawPC(const State& st) {
 constexpr int BAG_ROWS = 10;
 
 void drawBag(const State& st) {
-    GameKind k = here(st);
     text("Beutel", 8, 48, 0.55f, C_WHITE);
     text("nur Taschen, die mitreisen", 392, 50, 0.4f, C_LIGHT, RIGHT);
     if (st.bank.items.empty()) { text("leer", 200, 130, 0.6f, C_LIGHT, CENTER); return; }
@@ -258,13 +280,13 @@ void drawBag(const State& st) {
         int i = st.bagScroll + r;
         if (i >= int(st.bank.items.size())) break;
         const BankItem& b = st.bank.items[size_t(i)];
-        Pouch p = pouchOf(k, b.item);
+        const char* place = itemPlaceHere(st, b.item);
         float y = 70 + r * 17;
         rect(8, y, 384, 16, r % 2 ? C_BG2 : C_BG);
-        u32 c = p == Pouch::None ? C_CARD_DIM : C_WHITE;
+        u32 c = place ? C_WHITE : C_CARD_DIM;
         text(g_names.item(b.item), 14, y + 1, 0.45f, c, LEFT, 210);
         text("× " + std::to_string(b.count), 280, y + 1, 0.45f, c, RIGHT);
-        text(p == Pouch::None ? "hier nicht sichtbar" : pouchName(p), 386, y + 2, 0.4f, p == Pouch::None ? C_ERR : C_LIGHT, RIGHT);
+        text(place ? place : "hier nicht sichtbar", 386, y + 2, 0.4f, place ? C_LIGHT : C_ERR, RIGHT);
     }
     if (st.bank.items.size() > size_t(BAG_ROWS))
         text("▲▼ blättern", 392, 242 - 18, 0.38f, C_LIGHT, RIGHT);
@@ -301,14 +323,17 @@ const Button B_TRAVEL{8, 34, 148, 66}, B_TEAM{164, 34, 148, 66}, B_PC{8, 108, 14
 const Button B_EXIT{8, 196, 304, 36}, B_BACK{8, 200, 304, 32};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 
-// Schaltflächen der Regionswahl: drei Spalten, je Region die installierten Spiele.
-const char* REGIONS[] = {"Hoenn", "Kalos", "Alola"};
+// Schaltflächen der Regionswahl: fünf Spalten, je Region die installierten Spiele.
+constexpr int NREG = 5;
+const char* REGIONS[NREG] = {"Kanto", "Johto", "Hoenn", "Kalos", "Alola"};
+constexpr float COLW = 60, COLGAP = 3, COLX = 4;
 std::vector<std::pair<Button, const Game*>> travelButtons(const State& st) {
     std::vector<std::pair<Button, const Game*>> out;
-    for (int r = 0; r < 3; r++) {
+    for (int r = 0; r < NREG; r++) {
         int n = 0;
         for (const Game* g : st.installed)
-            if (std::string(g->region) == REGIONS[r]) out.push_back({Button{8.0f + r * 104, 56.0f + n++ * 34, 96, 30}, g});
+            if (std::string(g->region) == REGIONS[r])
+                out.push_back({Button{COLX + r * (COLW + COLGAP), 56.0f + n++ * 34, COLW, 30}, g});
     }
     return out;
 }
@@ -327,13 +352,13 @@ void drawBottom(const State& st) {
         break;
     case Screen::Travel: {
         text("Wohin möchtest du reisen?", 160, 4, 0.55f, C_WHITE, CENTER);
-        for (int r = 0; r < 3; r++) {
-            rect(8 + r * 104, 32, 96, 20, regionColor(REGIONS[r]));
-            text(REGIONS[r], 56 + r * 104, 33, 0.5f, C_WHITE, CENTER);
+        for (int r = 0; r < NREG; r++) {
+            rect(COLX + r * (COLW + COLGAP), 32, COLW, 20, regionColor(REGIONS[r]));
+            text(REGIONS[r], COLX + r * (COLW + COLGAP) + COLW / 2, 33, 0.45f, C_WHITE, CENTER, COLW - 4);
         }
         for (auto& [b, g] : travelButtons(st)) {
             bool isHere = g == st.current;
-            button(b, g->name, isHere ? C_BG2 : C_CARD, isHere ? C_LIGHT : C_TEXT, 0.48f);
+            button(b, g->name, isHere ? C_BG2 : C_CARD, isHere ? C_LIGHT : C_TEXT, 0.42f);
             if (isHere) text("hier", b.x + b.w - 4, b.y + 1, 0.32f, C_SEL, RIGHT);
         }
         button(B_BACK, "Zurück", C_BG2, C_WHITE, 0.55f);
@@ -423,11 +448,32 @@ bool travel(State& st, std::string& err) {
     std::vector<u8> fromData, toData;
     if (!readSave(from, fromData, err) || !readSave(to, toData, err)) return false;
     std::string e;
-    auto fromSav = openSave(fromData, e);
-    auto toSav = openSave(toData, e);
-    if (!fromSav || !toSav) { err = "Spielstand nicht erkannt: " + e; return false; }
-    if (!fromSav->valid()) { err = std::string(from.name) + ": Prüfsummen stimmen nicht"; return false; }
-    if (!toSav->valid()) { err = std::string(to.name) + ": Prüfsummen stimmen nicht"; return false; }
+    // Gen 6/7 über SaveFile, Gen 1/2 über SaveGB
+    std::unique_ptr<SaveFile> fromSav, toSav;
+    SaveGB fromGB, toGB;
+    auto openAny = [&](const Game& g, const std::vector<u8>& data, std::unique_ptr<SaveFile>& sf, SaveGB& gb) {
+        if (g.gen <= 2) {
+            if (!gb.load(data, e)) { err = std::string(g.name) + ": " + e; return false; }
+            if (!gb.checksumValid()) { err = std::string(g.name) + ": Prüfsumme stimmt nicht"; return false; }
+            return true;
+        }
+        sf = openSave(data, e);
+        if (!sf) { err = std::string(g.name) + ": " + e; return false; }
+        if (!sf->valid()) { err = std::string(g.name) + ": Prüfsummen stimmen nicht"; return false; }
+        return true;
+    };
+    if (!openAny(from, fromData, fromSav, fromGB) || !openAny(to, toData, toSav, toGB)) return false;
+    if ((from.gen <= 2 || to.gen <= 2) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
+    auto ctxFor = [&](const Game& g) {
+        GBContext c;
+        c.species = &g_species;
+        c.names = &g_names;
+        c.trainer = st.bank.trainer;
+        c.gen = g.gen;
+        c.version = g.gbVersion;
+        c.language = g.language;
+        return c;
+    };
 
     step("Lege Sicherungen an");
     mkdir(DIR, 0777);
@@ -443,25 +489,34 @@ bool travel(State& st, std::string& err) {
         std::fread(bankData.data(), 1, bankData.size(), bf);
         std::fclose(bf);
     }
-    if (!backup(stamp, std::string(from.name) + ".main", fromData) || !backup(stamp, std::string(to.name) + ".main", toData) ||
-        !backup(stamp, "speicher.bin", bankData)) {
+    if (!backup(stamp, std::string(from.name) + "-" + from.saveFile, fromData) ||
+        !backup(stamp, std::string(to.name) + "-" + to.saveFile, toData) || !backup(stamp, "speicher.bin", bankData)) {
         err = "Sicherung fehlgeschlagen";
         return false;
     }
 
     step("Übertrage Pokémon, Items und Geld");
     Bank bank = st.bank;
-    if (!bank.depart(*fromSav, err)) return false;
+    if (from.gen <= 2 ? !bank.departGB(fromGB, ctxFor(from), err) : !bank.depart(*fromSav, err)) return false;
     int hidden = 0;
-    if (!bank.arrive(*toSav, hidden, err)) return false;
+    if (to.gen <= 2 ? !bank.arriveGB(toGB, ctxFor(to), hidden, err) : !bank.arrive(*toSav, hidden, err)) return false;
 
-    step("Berechne Prüfsummen und Signatur");
-    toSav->finalize();
-    auto check = openSave(toSav->raw(), e);
-    if (!check || !check->valid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
+    step(to.gen == 7 ? "Berechne Prüfsummen und Signatur" : "Berechne Prüfsummen");
+    std::vector<u8> outData;
+    if (to.gen <= 2) {
+        toGB.finalize();
+        SaveGB check;
+        if (!check.load(toGB.raw(), e) || !check.checksumValid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
+        outData = toGB.raw();
+    } else {
+        toSav->finalize();
+        auto check = openSave(toSav->raw(), e);
+        if (!check || !check->valid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
+        outData = toSav->raw();
+    }
 
     step("Schreibe Spielstand");
-    if (!writeSave(to, toSav->raw(), err)) return false;
+    if (!writeSave(to, outData, err)) return false;
     if (!bank.save(BANK, err)) { err = "Spielstand geschrieben, aber Speicher nicht: " + err; return false; }
     writeLast(to.lowId);
     st.bank = bank;

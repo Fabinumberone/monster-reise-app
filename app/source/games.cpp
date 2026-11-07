@@ -5,13 +5,30 @@
 using pw3d::GameKind;
 
 const std::vector<Game>& allGames() {
+    // Gen 1/2: Virtual-Console-Titel (EU), Spiel und Sprache am ROM-Namen im RomFS bestätigt.
     static const std::vector<Game> games = {
-        {"Omega Rubin", "Hoenn", 0x0011C400, GameKind::ORAS}, {"Alpha Saphir", "Hoenn", 0x0011C500, GameKind::ORAS},
-        {"X", "Kalos", 0x00055D00, GameKind::XY},              {"Y", "Kalos", 0x00055E00, GameKind::XY},
-        {"Sonne", "Alola", 0x00164800, GameKind::SM},          {"Mond", "Alola", 0x00175E00, GameKind::SM},
-        {"Ultrasonne", "Alola", 0x001B5000, GameKind::USUM},   {"Ultramond", "Alola", 0x001B5100, GameKind::USUM},
+        {"Blau (EN)", "Kanto", 0x00171100, 1, GameKind::XY, "sav.dat", 2, 37},
+        {"Gelb (EN)", "Kanto", 0x00171200, 1, GameKind::XY, "sav.dat", 2, 38},
+        {"Gelb", "Kanto", 0x00171500, 1, GameKind::XY, "sav.dat", 5, 38},
+        {"Kristall (EN)", "Johto", 0x00172800, 2, GameKind::XY, "sav.dat", 2, 41},
+        {"Silber", "Johto", 0x00172A00, 2, GameKind::XY, "sav.dat", 5, 40},
+        {"Kristall", "Johto", 0x00172B00, 2, GameKind::XY, "sav.dat", 5, 41},
+        {"Omega Rubin", "Hoenn", 0x0011C400, 6, GameKind::ORAS, "main"},
+        {"Alpha Saphir", "Hoenn", 0x0011C500, 6, GameKind::ORAS, "main"},
+        {"X", "Kalos", 0x00055D00, 6, GameKind::XY, "main"},
+        {"Y", "Kalos", 0x00055E00, 6, GameKind::XY, "main"},
+        {"Sonne", "Alola", 0x00164800, 7, GameKind::SM, "main"},
+        {"Mond", "Alola", 0x00175E00, 7, GameKind::SM, "main"},
+        {"Ultrasonne", "Alola", 0x001B5000, 7, GameKind::USUM, "main"},
+        {"Ultramond", "Alola", 0x001B5100, 7, GameKind::USUM, "main"},
     };
     return games;
+}
+
+const char* bankKind(const Game& g) {
+    if (g.gen == 1) return "RBY";
+    if (g.gen == 2) return "GSC";
+    return pw3d::kindName(g.kind);
 }
 
 const Game* gameByLowId(u32 lowId) {
@@ -28,8 +45,8 @@ std::string emuPath(const Game& g) {
     char p[160];
     std::snprintf(p, sizeof p,
                   "sdmc:/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000/"
-                  "title/%08lx/%08lx/data/00000001/main",
-                  (unsigned long)HIGH_ID, (unsigned long)g.lowId);
+                  "title/%08lx/%08lx/data/00000001/%s",
+                  (unsigned long)HIGH_ID, (unsigned long)g.lowId, g.saveFile);
     return p;
 }
 
@@ -61,7 +78,7 @@ bool hasSave(const Game& g) {
     FS_MediaType m;
     if (!openArchive(g, a, m)) return false;
     Handle h;
-    bool ok = R_SUCCEEDED(FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, "/main"), FS_OPEN_READ, 0));
+    bool ok = R_SUCCEEDED(FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, (std::string("/") + g.saveFile).c_str()), FS_OPEN_READ, 0));
     if (ok) FSFILE_Close(h);
     FSUSER_CloseArchive(a);
     return ok;
@@ -83,7 +100,7 @@ bool readSave(const Game& g, std::vector<u8>& out, std::string& err) {
     FS_MediaType m;
     if (!openArchive(g, a, m)) { err = "Spielstand-Archiv nicht zugänglich"; return false; }
     Handle h;
-    Result r = FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, "/main"), FS_OPEN_READ, 0);
+    Result r = FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, (std::string("/") + g.saveFile).c_str()), FS_OPEN_READ, 0);
     if (R_FAILED(r)) { FSUSER_CloseArchive(a); err = "Datei main fehlt"; return false; }
     u64 size = 0;
     FSFILE_GetSize(h, &size);
@@ -109,7 +126,7 @@ bool writeSave(const Game& g, const std::vector<u8>& data, std::string& err) {
     FS_MediaType m;
     if (!openArchive(g, a, m)) { err = "Spielstand-Archiv nicht zugänglich"; return false; }
     Handle h;
-    Result r = FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, "/main"), FS_OPEN_WRITE, 0);
+    Result r = FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, (std::string("/") + g.saveFile).c_str()), FS_OPEN_WRITE, 0);
     if (R_FAILED(r)) { FSUSER_CloseArchive(a); err = "Kann Spielstand nicht öffnen"; return false; }
     u32 written = 0;
     r = FSFILE_Write(h, &written, 0, data.data(), u32(data.size()), FS_WRITE_FLUSH);
