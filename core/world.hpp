@@ -51,6 +51,10 @@ struct WorldReport {
     int added = 0, updated = 0, released = 0, written = 0;
 };
 
+// Protokoll (z. B. Datei auf der SD), wird bei jedem Schritt aufgerufen; nullptr = keins.
+using WorldLog = void (*)(const std::string&);
+void setWorldLog(WorldLog fn);
+
 // Einlesen und danach alle Spielstände schreiben (siehe oben).
 void worldSync(Bank& bank, std::vector<WorldSave>& saves, const SpeciesData& species, const Names& names, WorldReport& rep);
 // Nur schreiben (z. B. nach Umräumen oder Entlassen in der App).

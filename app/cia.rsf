@@ -51,7 +51,7 @@ AccessControlInfo:
   RunnableOnSleep               : false
   SpecialMemoryArrange          : true
 
-  SystemModeExt                 : Legacy
+  SystemModeExt                 : 124MB
   CpuSpeed                      : 268MHz
   EnableL2Cache                 : false
   CanAccessCore2                : false

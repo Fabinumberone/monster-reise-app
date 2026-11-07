@@ -185,6 +185,17 @@ void timeStamp(char* buf, size_t n) {
     std::strftime(buf, n, "%Y%m%d-%H%M%S", std::localtime(&now));
 }
 
+// Protokoll des letzten Starts (sdmc:/pokemon-world-3d/protokoll.txt), Zeile für Zeile geschrieben,
+// damit nach einem Absturz sichtbar ist, wie weit die App kam.
+const char* LOGFILE = "sdmc:/pokemon-world-3d/protokoll.txt";
+void logLine(const std::string& s) {
+    if (FILE* f = std::fopen(LOGFILE, "a")) {
+        std::fputs(s.c_str(), f);
+        std::fputc(10, f);
+        std::fclose(f);
+    }
+}
+
 // Sicherungen: höchstens KEEP je Spielstand (Dateiname „<Zeit>-<was>“, nach Zeit sortiert).
 constexpr int KEEP = 10;
 void pruneBackups(const std::string& what) {
@@ -238,6 +249,7 @@ void commit(State& st, bool sync) {
         if (!w.changed) continue;
         std::string err;
         const SaveSlot& slot = st.installed[i];
+        logLine("speichere " + slot.label());
         if (!backupFile(stamp, slot.label() + "-" + saveName(*slot.game), before[i]) || !writeSave(slot, w.data, err)) {
             // nicht geschrieben: beim nächsten Start wie neu einlesen, damit nichts verloren geht
             if (BankSlot* bs = st.bank.slot(w.lowId, w.media)) bs->synced = false;
@@ -265,6 +277,10 @@ void commit(State& st, bool sync) {
 
 // Beim Start: alle Spielstände lesen, Änderungen übernehmen, alle aktualisieren (world.hpp).
 void loadState(State& st) {
+    mkdir(DIR, 0777);
+    if (FILE* f = std::fopen(LOGFILE, "w")) std::fclose(f);
+    setWorldLog(logLine);
+    logLine("Start");
     g_names.load(NAMES);
     g_species.load(SPECIES);
     g_icons.load(ICONS);
@@ -289,9 +305,11 @@ void loadState(State& st) {
         w.language = s.game->language;
         std::string err;
         if (!readSave(s, w.data, err)) st.notice.push_back(err);
+        logLine("gelesen: " + w.label + " (" + std::to_string(w.data.size()) + " Byte)");
         st.saves.push_back(std::move(w));
     }
     commit(st, true);
+    logLine("fertig");
     // Zuletzt gestartetes Spiel (für die Anzeige „hier sichtbar“)
     u32 last = readLast();
     for (auto& s : st.installed)
@@ -943,6 +961,11 @@ void input(State& st, u32 down, const touchPosition& t) {
 }
 
 } // namespace
+
+// Größerer Stack (Standard 32 KB): der Abgleich legt größere Datenblöcke an.
+extern "C" {
+u32 __stacksize__ = 1024 * 1024;
+}
 
 int main() {
     gfxInitDefault();

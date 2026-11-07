@@ -1715,6 +1715,10 @@ uint8_t levelOf(const PK6& pk, const SpeciesData& sp) { return levelForExp(sp.ge
 
 } // namespace
 
+namespace { WorldLog g_worldLog = nullptr; }
+void setWorldLog(WorldLog fn) { g_worldLog = fn; }
+static void wlog(const std::string& s) { if (g_worldLog) g_worldLog(s); }
+
 struct WorldImpl {
     Bank& b;
     const SpeciesData& sp;
@@ -2352,12 +2356,14 @@ void writeAll(WorldImpl& wi, std::vector<WorldSave>& saves) {
         BankSlot* s = wi.b.slot(w.lowId, w.media);
         if (!s) { wi.b.record(w.lowId, w.media, w.gen, wi.trainerOf(w)); s = wi.b.slot(w.lowId, w.media); }
         // Speicher vor dem Schreiben sichern, damit ein fehlgeschlagener Spielstand nichts verändert
-        Bank before = wi.b;
         if (w.gen <= 5 && !s->version) s->version = w.version;
+        // Schlägt das Schreiben fehl, nur zurücknehmen, was writeView am Speicher ändert (Items, Geld)
+        std::vector<BankItem> items = wi.b.items;
+        uint32_t moneyWritten = wi.b.moneyWritten;
+        wlog("schreibe " + w.label);
         if (!wi.writeView(w, *s)) {
-            BankSlot keep = *s;
-            wi.b = before;
-            *wi.b.slot(w.lowId, w.media) = keep;
+            wi.b.items = std::move(items);
+            wi.b.moneyWritten = moneyWritten;
         }
     }
     wi.b.current.clear();
@@ -2370,8 +2376,11 @@ void writeAll(WorldImpl& wi, std::vector<WorldSave>& saves) {
 void worldSync(Bank& bank, std::vector<WorldSave>& saves, const SpeciesData& species, const Names& names, WorldReport& rep) {
     bank.species = &species;
     WorldImpl wi{bank, species, names, rep, {}};
-    for (WorldSave& w : saves)
+    wlog("Abgleich: " + std::to_string(saves.size()) + " Spielstände, " + std::to_string(bank.count()) + " Pokémon im Speicher");
+    for (WorldSave& w : saves) {
+        wlog("öffne " + w.label + " (" + std::to_string(w.data.size()) + " Byte)");
         if (!openWorldSave(w, species)) rep.lines.push_back(w.label + ": Spielstand ungültig, übersprungen");
+    }
     bank.ensureUids();
     // Herkunftsspiel je Spielstand festhalten (sonst kippt die Schätzung, sobald dort Pokémon aus allen Spielen liegen)
     for (WorldSave& w : saves) {
@@ -2389,6 +2398,7 @@ void worldSync(Bank& bank, std::vector<WorldSave>& saves, const SpeciesData& spe
         if (s && s->synced && bank.hasTrainer()) {
             if (fnv64(w.data.data(), w.data.size()) != s->fingerprint) {
                 w.played = true;
+                wlog("übernehme Änderungen aus " + w.label);
                 wi.readPlayed(w, *s);
             }
             continue;
@@ -2412,7 +2422,9 @@ void worldSync(Bank& bank, std::vector<WorldSave>& saves, const SpeciesData& spe
         bool cur = false;
         for (auto& in : legacy) { if (in.current && cur) in.current = false; cur |= in.current; }
         SyncReport sr;
+        wlog("lese ein (neu): " + std::to_string(legacy.size()) + " Spielstände");
         syncAll(bank, legacy, species, names, sr);
+        wlog("eingelesen: " + std::to_string(bank.count()) + " Pokémon");
         for (auto& l : sr.lines) rep.lines.push_back(l);
         rep.added += sr.added;
         rep.updated += sr.updated;
@@ -2422,6 +2434,7 @@ void worldSync(Bank& bank, std::vector<WorldSave>& saves, const SpeciesData& spe
     if (!bank.hasTrainer()) return;
     // 3. Alle Spielstände schreiben
     writeAll(wi, saves);
+    wlog("Abgleich fertig");
 }
 
 void worldWrite(Bank& bank, std::vector<WorldSave>& saves, const SpeciesData& species, const Names& names, WorldReport& rep) {
