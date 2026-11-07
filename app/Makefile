@@ -39,6 +39,7 @@ INCLUDES	:=	include ../core
 GRAPHICS	:=	gfx
 GFXBUILD	:=	$(BUILD)
 #ROMFS		:=	romfs
+ICON		:=	assets/icon.png
 APP_TITLE	:=	Pokémon World 3D
 APP_DESCRIPTION	:=	Reise zwischen den Regionen
 APP_AUTHOR	:=	Fabi
@@ -161,11 +162,21 @@ ifneq ($(ROMFS),)
 	export _3DSXFLAGS += --romfs=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: all clean
+.PHONY: all clean cia
 
 #---------------------------------------------------------------------------------
 all: $(BUILD) $(GFXBUILD) $(DEPSDIR) $(ROMFS_T3XFILES) $(T3XHFILES)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+
+#---------------------------------------------------------------------------------
+# .cia: makerom und bannertool liegen unter $(DEVKITPRO)/tools/cia
+CIATOOLS := $(DEVKITPRO)/tools/cia
+cia: all
+	@$(CIATOOLS)/bannertool.exe makebanner -i assets/banner.png -a assets/banner.wav -o $(BUILD)/banner.bnr
+	@# Icon: das SMDH von smdhtool (bannertool makesmdh scheitert unter Windows am „é“)
+	@$(CIATOOLS)/makerom.exe -f cia -o $(TARGET).cia -target t -exefslogo -elf $(TARGET).elf -rsf cia.rsf \
+		-banner $(BUILD)/banner.bnr -icon $(TARGET).smdh
+	@echo built ... $(TARGET).cia
 
 $(BUILD):
 	@mkdir -p $@
