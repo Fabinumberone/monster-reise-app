@@ -19,8 +19,11 @@
 #include "../core/save6.hpp"
 #include "../core/save7.hpp"
 #include "../core/savefile.hpp"
+#include "../core/sync.hpp"
 
 using namespace pw3d;
+
+static SpeciesData g_species; // arten.bin von der Azahar-SD
 
 static const char* USAGE =
     "Aufruf:\n"
@@ -36,7 +39,9 @@ static const char* USAGE =
     "  pw3d-reise speicher-neu <speicher> <startspiel> [weitere …]\n"
     "  pw3d-reise speicher-info <speicher>\n"
     "  pw3d-reise reise <speicher> <von> <nach>\n"
-    "  pw3d-reise speicher-items <speicher> <spielstände …>  (Items einmalig dazulegen)\n";
+    "  pw3d-reise speicher-items <speicher> <spielstände …>  (Items einmalig dazulegen)\n"
+    "  pw3d-reise abgleich <speicher> [aktuell:|bekannt:][modul:][en:|de:]<spielstand> …\n"
+    "                                         wie die App beim Start (legt den Speicher an, falls nötig)\n";
 
 static bool readFile(const std::string& path, std::vector<uint8_t>& out) {
     std::ifstream f(path, std::ios::binary);
@@ -338,6 +343,7 @@ static int cmdSpeicherNeu(int argc, char** argv) {
         others.push_back(std::move(o));
     }
     Bank bank;
+    bank.species = &g_species;
     bank.create(*start, ptrs);
     std::string err;
     if (!bank.save(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
@@ -347,7 +353,7 @@ static int cmdSpeicherNeu(int argc, char** argv) {
 
 // reise <speicher> <von> <nach>: Stand aus „von“ übernehmen und in „nach“ schreiben.
 // ---------- Gen-1/2-Hilfen ----------
-static SpeciesData g_species; // arten.bin von der Azahar-SD
+
 
 // Pfad mit optionaler Sprache davor: "en:pfad" oder "de:pfad" (Standard Deutsch).
 static std::string splitLang(const std::string& arg, uint8_t& lang) {
@@ -396,13 +402,16 @@ static bool writeGB(const std::string& path, SaveGB& s) {
 static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg) {
     if (!g_species.loaded()) { std::fprintf(stderr, "arten.bin fehlt (tools/gen-arten.mjs)\n"); return 1; }
     Bank bank;
+    bank.species = &g_species;
     std::string err;
     if (!bank.load(bankPath, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     uint8_t fromLang, toLang;
     std::string fromPath = splitLang(fromArg, fromLang), toPath = splitLang(toArg, toLang);
 
     std::string fromTitle, toTitle;
-    if (isGBFile(fromPath)) {
+    if (fromPath == "-") { // kein aktuelles Spiel (neuer Speicher)
+        fromTitle = "keinem Spiel";
+    } else if (isGBFile(fromPath)) {
         SaveGB from;
         if (!loadGB(fromPath, from)) return 1;
         if (!bank.departGB(from, makeCtx(from, fromLang, bank.trainer), err)) { std::fprintf(stderr, "Abreise: %s\n", err.c_str()); return 1; }
@@ -433,6 +442,49 @@ static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg
     }
     std::printf("Gereist von %s nach %s: %d Pokémon, davon %d dort nicht sichtbar\n", fromTitle.c_str(), toTitle.c_str(),
                 bank.count(), hidden);
+    return 0;
+}
+
+// abgleich <speicher> <spielstände …>: wie die App beim Start. Title-ID aus dem Pfad
+// (…/title/00040000/<id>/…), sonst aus der Reihenfolge.
+static int cmdAbgleich(int argc, char** argv) {
+    Bank bank;
+    bank.species = &g_species;
+    std::string err;
+    bool exists = bool(std::ifstream(argv[2]));
+    if (exists && !bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    std::vector<SyncInput> in;
+    for (int i = 3; i < argc; i++) {
+        std::string a = argv[i];
+        SyncInput s;
+        if (a.rfind("aktuell:", 0) == 0) { s.current = true; a = a.substr(8); }
+        if (a.rfind("bekannt:", 0) == 0) { s.known = true; a = a.substr(8); }
+        if (a.rfind("modul:", 0) == 0) { s.media = 2; a = a.substr(6); }
+        std::string p = splitLang(a, s.language);
+        if (!readFile(p, s.data)) { std::fprintf(stderr, "Kann %s nicht lesen\n", p.c_str()); return 1; }
+        s.lowId = 0xF0000000u + unsigned(i);
+        std::string q = p;
+        for (auto& c : q) if (c == '\\') c = '/';
+        size_t t = q.find("/00040000/");
+        if (t != std::string::npos) s.lowId = uint32_t(std::strtoul(q.substr(t + 10, 8).c_str(), nullptr, 16));
+        if (isGBFile(p)) {
+            SaveGB g;
+            if (!loadGB(p, g)) return 1;
+            s.gen = g.generation();
+            s.gbVersion = makeCtx(g, s.language, bank.trainer).version;
+        } else {
+            auto sv = open(p, false);
+            s.gen = sv ? sv->generation() : 7;
+        }
+        s.label = q.substr(q.find_last_of('/') + 1) + (s.media == 2 ? " (Modul)" : "") + " [" + std::to_string(i - 2) + "]";
+        in.push_back(std::move(s));
+    }
+    SyncReport rep;
+    syncAll(bank, in, g_species, g_names, rep);
+    for (auto& l : rep.lines) std::printf("%s\n", l.c_str());
+    if (!bank.save(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    std::printf("Gesehen: %zu, Gen 1/2: %zu, bekannte Spielstände: %zu\n", bank.seen.size(), bank.seenGb.size(), bank.slots.size());
+    printBank(bank);
     return 0;
 }
 
@@ -522,12 +574,14 @@ int main(int argc, char** argv) {
     if (cmd == "speicher-neu" && argc >= 4) return cmdSpeicherNeu(argc, argv);
     if (cmd == "speicher-info" && argc == 3) {
         Bank bank;
+        bank.species = &g_species;
         std::string err;
         if (!bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
         printBank(bank);
         return 0;
     }
     if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
+    if (cmd == "abgleich" && argc >= 4) return cmdAbgleich(argc, argv);
     if (cmd == "item" && argc == 5) { // Test: Item in die passende reisende Tasche legen
         auto s = open(argv[2], true);
         if (!s) return 1;
@@ -543,6 +597,7 @@ int main(int argc, char** argv) {
     if (cmd == "speicher-gb" && argc >= 4) { // Gen-1/2-Spielstände einmalig dazulegen
         if (!g_species.loaded()) { std::fprintf(stderr, "arten.bin fehlt\n"); return 1; }
         Bank bank;
+        bank.species = &g_species;
         std::string err;
         if (!bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
         for (int i = 3; i < argc; i++) {
@@ -559,6 +614,7 @@ int main(int argc, char** argv) {
     }
     if (cmd == "speicher-items" && argc >= 4) { // Items weiterer Spielstände einmalig dazulegen
         Bank bank;
+        bank.species = &g_species;
         std::string err;
         if (!bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
         for (int i = 3; i < argc; i++) {

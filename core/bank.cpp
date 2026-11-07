@@ -59,7 +59,55 @@ void reownIfFrom(PK6& pk, const Trainer6& from, const Trainer6& to) {
     }
 }
 
+uint64_t monId(const PK6& pk) { return (uint64_t(pk.ec()) << 32) | pk.pid(); }
+uint64_t gbId(uint32_t key, uint16_t family) { return (uint64_t(key) << 16) | family; }
+
+bool contains(const std::vector<uint64_t>& v, uint64_t x) { return std::binary_search(v.begin(), v.end(), x); }
+void insertSorted(std::vector<uint64_t>& v, uint64_t x) {
+    auto it = std::lower_bound(v.begin(), v.end(), x);
+    if (it == v.end() || *it != x) v.insert(it, x);
+}
+
+bool sameTrainer(const Trainer6& a, uint16_t tid, uint16_t sid, const std::string& name) {
+    return a.tid == tid && a.sid == sid && a.name == name;
+}
+
 } // namespace
+
+BankSlot* Bank::slot(uint32_t lowId, uint8_t media) {
+    for (auto& s : slots)
+        if (s.lowId == lowId && s.media == media) return &s;
+    return nullptr;
+}
+
+// Gehört ein Pokémon mit diesem Originaltrainer dem Spieler? (Speicher-Trainer oder Trainer
+// eines bekannten Spielstands; bei Gen 1/2 ohne SID.)
+bool Bank::ownTrainer(uint16_t tid, uint16_t sid, const std::string& name, bool gb) const {
+    auto match = [&](const Trainer6& t) { return t.tid == tid && t.name == name && (gb || t.sid == sid); };
+    if (match(trainer)) return true;
+    for (auto& s : slots)
+        if ((s.gen <= 2) == gb && match(s.trainer)) return true;
+    return false;
+}
+
+void Bank::record(uint32_t lowId, uint8_t media, int gen, const Trainer6& t) {
+    BankSlot* s = slot(lowId, media);
+    if (!s) { slots.push_back({}); s = &slots.back(); }
+    s->lowId = lowId;
+    s->media = media;
+    s->gen = uint8_t(gen);
+    s->trainer = t;
+}
+
+void Bank::remember() {
+    auto add = [&](const BankEntry& e) {
+        if (!e.used) return;
+        insertSorted(seen, monId(e.pk));
+        if (e.hasGb) insertSorted(seenGb, gbId(e.gbKey, familyOf(e.gb.species)));
+    };
+    for (auto& e : party) add(e);
+    for (auto& e : boxes) add(e);
+}
 
 BankEntry* Bank::find(const PK6& pk) {
     return const_cast<BankEntry*>(findIn(party, boxes, pk));
@@ -108,6 +156,7 @@ void Bank::create(const SaveFile& start, const std::vector<const SaveFile*>& oth
         e->written = uint16_t(e->written + s.count); // steht im Startspiel
     }
     money = start.money();
+    moneyWritten = money;
     moneyKnown = true;
 
     for (const SaveFile* o : others) {
@@ -145,7 +194,7 @@ void Bank::addItemsFrom(const SaveFile& sav) {
     }
 }
 
-bool Bank::depart(const SaveFile& sav, std::string& err) {
+bool Bank::depart(const SaveFile& sav, std::string& err, bool stay) {
     if (current != kindName(sav.kind())) {
         err = std::string("Der Speicher steht in ") + (current.empty() ? "keinem Spiel" : current) + ", nicht in " +
               kindName(sav.kind());
@@ -159,6 +208,7 @@ bool Bank::depart(const SaveFile& sav, std::string& err) {
         PK6 pk = sav.partySlot(i);
         if (!present(pk)) continue;
         team.push_back(importMon(sav, pk, findIn(party, boxes, pk)));
+        team.back().inGame = stay;
     }
     // Nicht angezeigte Team-Pokémon an ihren alten Platz zurück (solange das Team nicht voll ist).
     std::vector<const BankEntry*> overflow;
@@ -177,6 +227,7 @@ bool Bank::depart(const SaveFile& sav, std::string& err) {
             if (sav.boxSlotEmpty(b, s)) continue;
             PK6 pk = sav.boxSlot(b, s);
             nb[b * SLOTS + s] = importMon(sav, pk, findIn(party, boxes, pk));
+            nb[b * SLOTS + s].inGame = stay;
         }
 
     // Was das Spiel nicht angezeigt hat, bleibt erhalten.
@@ -205,17 +256,78 @@ bool Bank::depart(const SaveFile& sav, std::string& err) {
         ni.push_back({item, 0, n});
     };
     for (const ItemStack& s : readTravelItems(sav)) addTo(s.item, s.count);               // Spielinhalt zuerst
+    if (stay) for (auto& b : ni) b.written = uint16_t(std::min<uint32_t>(b.count, 0xFFFF));
     for (auto& b : items) addTo(b.item, b.count - std::min<uint32_t>(b.written, b.count)); // unsichtbarer Rest
 
-    for (auto& e : np) e.inGame = false;
-    for (auto& e : nb) e.inGame = false;
+    remember(); // vorher: wer jetzt fehlt, wurde freigelassen und soll nicht zurückkommen
     party = np;
     boxes = nb;
     items = ni;
-    money = sav.money();
+    { // Geld: Spielinhalt + was dort nicht hineinpasste bzw. aus anderen Spielständen dazukam
+        uint64_t extra = money > moneyWritten ? money - moneyWritten : 0;
+        money = uint32_t(std::min<uint64_t>(uint64_t(sav.money()) + extra, 9999999));
+        moneyWritten = stay ? sav.money() : 0;
+    }
     moneyKnown = true;
-    current.clear();
+    if (!stay) current.clear();
     return true;
+}
+
+IntegrateResult Bank::integrate(const SaveFile& sav, uint32_t lowId, uint8_t media, bool forceNew) {
+    IntegrateResult r;
+    const Trainer6 st = sav.trainer();
+    BankSlot* sl = slot(lowId, media);
+    // Neu, wenn der Trainer weder der des Speichers (dann hat der Speicher ihn geschrieben oder er
+    // stammt von dort) noch der zuletzt gesehene dieses Spielstands ist.
+    r.newSave = forceNew || (!sameTrainer(trainer, st.tid, st.sid, st.name) && (!sl || !sameTrainer(sl->trainer, st.tid, st.sid, st.name)));
+    if (!sl) { record(lowId, media, sav.generation(), st); sl = slot(lowId, media); }
+    if (r.newSave) {
+        if (!sl) { slots.push_back({}); sl = &slots.back(); }
+        sl->lowId = lowId;
+        sl->media = media;
+        sl->gen = uint8_t(sav.generation());
+        sl->trainer = st;
+        addItemsFrom(sav);
+        money = std::min<uint32_t>(money + sav.money(), 9999999);
+        moneyKnown = true;
+    }
+    auto add = [&](PK6 pk, bool fromParty, int box, int s) {
+        if (!present(pk)) return;
+        if (ownTrainer(pk.tid(), pk.sid(), pk.otName(), false) &&
+            !sameTrainer(trainer, pk.tid(), pk.sid(), pk.otName())) {
+            pk.setTid(trainer.tid);
+            pk.setSid(trainer.sid);
+            pk.setOtName(trainer.name);
+            pk.updateChecksum();
+        }
+        if (BankEntry* e = find(pk)) {
+            if (!e->inGame && pk.exp() > e->pk.exp()) { // dort weitergespielt
+                BankEntry n = importMon(sav, pk, e);
+                *e = n;
+                r.updated++;
+            }
+            return;
+        }
+        if (contains(seen, monId(pk))) return; // freigelassen oder alte Kopie
+        BankEntry e = importMon(sav, pk, nullptr);
+        BankEntry* dst = nullptr;
+        if (fromParty) {
+            for (auto& p : party)
+                if (!p.used) { dst = &p; break; }
+        } else if (box < BOXES && !boxes[size_t(box * SLOTS + s)].used) {
+            dst = &boxes[size_t(box * SLOTS + s)];
+        }
+        if (!dst) dst = freeBoxSlot(boxes);
+        if (!dst) { r.noRoom++; return; }
+        *dst = e;
+        insertSorted(seen, monId(pk));
+        r.added++;
+    };
+    for (int i = 0; i < sav.partyCount() && i < PARTY; i++) add(sav.partySlot(i), true, 0, 0);
+    for (int b = 0; b < sav.boxCount(); b++)
+        for (int s = 0; s < SLOTS; s++)
+            if (!sav.boxSlotEmpty(b, s)) add(sav.boxSlot(b, s), false, b, s);
+    return r;
 }
 
 bool Bank::arrive(SaveFile& sav, int& hidden, std::string& err) {
@@ -282,7 +394,7 @@ bool Bank::arrive(SaveFile& sav, int& hidden, std::string& err) {
     std::vector<uint16_t> written;
     writeTravelItems(sav, stacks, written);
     for (size_t i = 0; i < items.size(); i++) items[i].written = written[i];
-    if (moneyKnown) sav.setMoney(std::min<uint32_t>(money, 9999999));
+    if (moneyKnown) { moneyWritten = std::min<uint32_t>(money, 9999999); sav.setMoney(moneyWritten); }
 
     Trainer6 t = sav.trainer();
     t.tid = trainer.tid;
@@ -338,7 +450,7 @@ int itemPriority(uint16_t m) {
 
 } // namespace
 
-bool Bank::departGB(const SaveGB& sav, const GBContext& ctxIn, std::string& err) {
+bool Bank::departGB(const SaveGB& sav, const GBContext& ctxIn, std::string& err, bool stay) {
     const char* kind = gbKind(sav.generation());
     if (current != kind) {
         err = std::string("Der Speicher steht in ") + (current.empty() ? "keinem Spiel" : current) + ", nicht in " + kind;
@@ -348,9 +460,10 @@ bool Bank::departGB(const SaveGB& sav, const GBContext& ctxIn, std::string& err)
     ctx.gameTid = sav.tid();
     ctx.gameOt = sav.trainerName();
     std::vector<const BankEntry*> matched;
-    auto findGb = [&](uint32_t key) -> const BankEntry* {
+    auto findGb = [&](uint32_t key, uint16_t fam) -> const BankEntry* {
         auto ok = [&](const BankEntry& e) {
-            return e.used && e.hasGb && e.gbKey == key && std::find(matched.begin(), matched.end(), &e) == matched.end();
+            return e.used && e.hasGb && e.gbKey == key && familyOf(e.gb.species) == fam &&
+                   std::find(matched.begin(), matched.end(), &e) == matched.end();
         };
         for (auto& e : party) if (ok(e)) return &e;
         for (auto& e : boxes) if (ok(e)) return &e;
@@ -358,7 +471,7 @@ bool Bank::departGB(const SaveGB& sav, const GBContext& ctxIn, std::string& err)
     };
     auto importGB = [&](const GBMon& m) {
         uint32_t key = gbKey(m);
-        const BankEntry* prev = findGb(key);
+        const BankEntry* prev = findGb(key, familyOf(m.species));
         BankEntry e;
         if (prev) {
             matched.push_back(prev);
@@ -371,7 +484,7 @@ bool Bank::departGB(const SaveGB& sav, const GBContext& ctxIn, std::string& err)
         e.hasGb = true;
         e.gb = m;
         e.gbKey = key;
-        e.inGame = false;
+        e.inGame = stay;
         return e;
     };
 
@@ -414,17 +527,86 @@ bool Bank::departGB(const SaveGB& sav, const GBContext& ctxIn, std::string& err)
         ni.push_back({item, 0, n});
     };
     for (const ItemStack& s : gbTravelItems(sav)) addTo(s.item, s.count);
+    if (stay) for (auto& b : ni) b.written = uint16_t(std::min<uint32_t>(b.count, 0xFFFF));
     for (auto& b : items) addTo(b.item, b.count - std::min<uint32_t>(b.written, b.count));
 
-    for (auto& e : np) e.inGame = false;
-    for (auto& e : nb) e.inGame = false;
+    remember();
     party = np;
     boxes = nb;
     items = ni;
-    money = sav.money();
+    { // Geld: Spielinhalt + was dort nicht hineinpasste bzw. aus anderen Spielständen dazukam
+        uint64_t extra = money > moneyWritten ? money - moneyWritten : 0;
+        money = uint32_t(std::min<uint64_t>(uint64_t(sav.money()) + extra, 9999999));
+        moneyWritten = stay ? sav.money() : 0;
+    }
     moneyKnown = true;
-    current.clear();
+    if (!stay) current.clear();
     return true;
+}
+
+IntegrateResult Bank::integrateGB(const SaveGB& sav, const GBContext& ctxIn, uint32_t lowId, uint8_t media, bool forceNew) {
+    IntegrateResult r;
+    GBContext ctx = ctxIn;
+    ctx.gameTid = sav.tid();
+    ctx.gameOt = sav.trainerName();
+    BankSlot* sl = slot(lowId, media);
+    auto same = [&](const Trainer6& t) { return t.tid == ctx.gameTid && t.name == ctx.gameOt; };
+    r.newSave = forceNew || (!same(trainer) && (!sl || !same(sl->trainer)));
+    if (!sl) { record(lowId, media, sav.generation(), Trainer6{ctx.gameTid, 0, 0, ctx.gameOt}); sl = slot(lowId, media); }
+    if (r.newSave) {
+        if (!sl) { slots.push_back({}); sl = &slots.back(); }
+        sl->lowId = lowId;
+        sl->media = media;
+        sl->gen = uint8_t(sav.generation());
+        sl->trainer = Trainer6{ctx.gameTid, 0, 0, ctx.gameOt};
+        for (const ItemStack& s : gbTravelItems(sav)) {
+            BankItem* e = nullptr;
+            for (auto& b : items) if (b.item == s.item) e = &b;
+            if (!e) { items.push_back({s.item, 0, 0}); e = &items.back(); }
+            e->count += s.count;
+        }
+        money = std::min<uint32_t>(money + sav.money(), 9999999);
+        moneyKnown = true;
+    }
+    auto add = [&](const GBMon& m, bool fromParty) {
+        uint32_t key = gbKey(m);
+        uint16_t fam = familyOf(m.species);
+        // Wiedererkennung: über den GB-Schlüssel (so zuletzt in ein GB-Spiel geschrieben) oder über
+        // EC/PID, die beim ersten Umwandeln aus dem ursprünglichen Schlüssel entstanden sind.
+        PK6 pk = gbToPk7(m, ctx);
+        BankEntry* known = find(pk);
+        auto match = [&](BankEntry& e) { return e.used && e.hasGb && e.gbKey == key && familyOf(e.gb.species) == fam; };
+        for (auto& e : party) if (!known && match(e)) known = &e;
+        for (auto& e : boxes) if (!known && match(e)) known = &e;
+        if (known) {
+            if (!known->inGame && known->hasGb && m.exp > known->gb.exp) { // dort weitergespielt
+                mergeGb(known->pk, m, known->gb, ctx);
+                known->gb = m;
+                known->gbKey = key;
+                r.updated++;
+            }
+            return;
+        }
+        if (contains(seenGb, gbId(key, fam)) || contains(seen, monId(pk))) return;
+        BankEntry e;
+        e.used = true;
+        e.pk = pk;
+        e.hasGb = true;
+        e.gb = m;
+        e.gbKey = key;
+        BankEntry* dst = nullptr;
+        if (fromParty) for (auto& p : party) if (!p.used) { dst = &p; break; }
+        if (!dst) dst = freeBoxSlot(boxes);
+        if (!dst) { r.noRoom++; return; }
+        *dst = e;
+        insertSorted(seenGb, gbId(key, fam));
+        insertSorted(seen, monId(e.pk));
+        r.added++;
+    };
+    for (const GBMon& m : sav.party()) add(m, true);
+    for (int b = 0; b < sav.boxCount(); b++)
+        for (const GBMon& m : sav.box(b)) add(m, false);
+    return r;
 }
 
 int Bank::addFromGB(const SaveGB& sav, const GBContext& ctxIn) {
@@ -523,7 +705,7 @@ bool Bank::arriveGB(SaveGB& sav, const GBContext& ctx, int& hidden, std::string&
     sav.setBag(bag);
     sav.setBalls(balls);
     sav.setPcItems(pc);
-    if (moneyKnown) sav.setMoney(std::min<uint32_t>(money, 999999));
+    if (moneyKnown) { moneyWritten = std::min<uint32_t>(money, 999999); sav.setMoney(moneyWritten); }
     sav.setTrainer(trainer.name, trainer.tid);
     current = gbKind(gen);
     return true;
@@ -538,6 +720,11 @@ bool Bank::arriveGB(SaveGB& sav, const GBContext& ctx, int& hidden, std::string&
 // Version 3 hängt zusätzlich an: u32 Anzahl Gen-1/2-Stände, je Stand u16 Eintrag (0–5 Team,
 // danach Boxplätze), u32 Schlüssel, u8 Generation, u8 Länge, 48 Byte Datensatz, 11 Byte OT-Name,
 // 11 Byte Spitzname (Spiel-Zeichensatz).
+// Version 4 hängt zusätzlich an: u32 aktueller Spielstand (untere Title-ID), u8 Medium, 3 frei,
+// u32 ins aktuelle Spiel geschriebenes Geld,
+// u32 Anzahl gesehener Pokémon, je u64 (EC·2^32 + PID), u32 Anzahl gesehener Gen-1/2-Pokémon,
+// je u64 (Schlüssel·2^16 + Familie), u32 Anzahl bekannter Spielstände, je 40 Byte: u32 Title-ID,
+// u8 Medium, u8 Generation, u16 TID, u16 SID, 2 frei, 28 Byte Trainername (UTF-8, mit Nullen).
 
 namespace {
 constexpr char MAGIC[8] = {'P', 'W', '3', 'D', 'B', 'A', 'N', 'K'};
@@ -546,10 +733,10 @@ constexpr size_t HEADER = 8 + 4 + 8 + 26 + 16;
 constexpr size_t GBREC = 2 + 4 + 1 + 1 + 48 + 11 + 11;
 } // namespace
 
-bool Bank::save(const std::string& path, std::string& err) const {
+std::vector<uint8_t> Bank::serialize() const {
     std::vector<uint8_t> out(HEADER + (PARTY + BOXES * SLOTS) * ENTRY, 0);
     std::memcpy(out.data(), MAGIC, 8);
-    wr32(&out[8], 3);
+    wr32(&out[8], 4);
     wr16(&out[12], trainer.tid);
     wr16(&out[14], trainer.sid);
     out[16] = trainer.gender;
@@ -601,6 +788,44 @@ bool Bank::save(const std::string& path, std::string& err) const {
         std::memcpy(q + 67, e.gb.nickRaw.data(), 11);
     }
 
+    // Version 4: aktueller Spielstand, gesehene Pokémon, bekannte Spielstände
+    Bank tmpSeen;
+    tmpSeen.species = species;
+    tmpSeen.seen = seen;
+    tmpSeen.seenGb = seenGb;
+    tmpSeen.party = party;
+    tmpSeen.boxes = boxes;
+    tmpSeen.remember();
+    tail = out.size();
+    out.resize(tail + 12 + 4 + tmpSeen.seen.size() * 8 + 4 + tmpSeen.seenGb.size() * 8 + 4 + slots.size() * 40, 0);
+    uint8_t* q = &out[tail];
+    wr32(q, currentLow);
+    q[4] = currentMedia;
+    wr32(q + 8, moneyWritten);
+    q += 12;
+    auto putList = [&](const std::vector<uint64_t>& v) {
+        wr32(q, uint32_t(v.size()));
+        q += 4;
+        for (uint64_t x : v) { wr32(q, uint32_t(x)); wr32(q + 4, uint32_t(x >> 32)); q += 8; }
+    };
+    putList(tmpSeen.seen);
+    putList(tmpSeen.seenGb);
+    wr32(q, uint32_t(slots.size()));
+    q += 4;
+    for (const BankSlot& s : slots) {
+        wr32(q, s.lowId);
+        q[4] = s.media;
+        q[5] = s.gen;
+        wr16(q + 6, s.trainer.tid);
+        wr16(q + 8, s.trainer.sid);
+        std::memcpy(q + 12, s.trainer.name.data(), std::min<size_t>(s.trainer.name.size(), 27));
+        q += 40;
+    }
+    return out;
+}
+
+bool Bank::save(const std::string& path, std::string& err) const {
+    std::vector<uint8_t> out = serialize();
     std::string tmp = path + ".neu";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -618,9 +843,10 @@ bool Bank::load(const std::string& path, std::string& err) {
     std::vector<uint8_t> in((std::istreambuf_iterator<char>(f)), {});
     const size_t base = HEADER + (PARTY + BOXES * SLOTS) * ENTRY;
     uint32_t version = in.size() >= 12 ? rd32(&in[8]) : 0;
-    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 3 ||
+    fileVersion = version;
+    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 4 ||
         (version == 1 && in.size() != base) || (version >= 2 && in.size() < base + 12)) {
-        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 3)";
+        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 4)";
         return false;
     }
     items.clear();
@@ -659,10 +885,17 @@ bool Bank::load(const std::string& path, std::string& err) {
     boxes.assign(BOXES * SLOTS, BankEntry{});
     for (auto& e : boxes) get(e);
 
-    if (version == 3) {
+    currentLow = 0;
+    currentMedia = 0;
+    moneyWritten = current.empty() ? 0 : money; // ältere Speicher: alles Geld steht im aktuellen Spiel
+    slots.clear();
+    seen.clear();
+    seenGb.clear();
+    if (version >= 3) {
         if (in.size() < gbAt + 4) { err = path + ": Gen-1/2-Teil fehlt"; return false; }
         uint32_t n = rd32(&in[gbAt]);
-        if (in.size() != gbAt + 4 + size_t(n) * GBREC) { err = path + ": Gen-1/2-Teil beschädigt"; return false; }
+        size_t end = gbAt + 4 + size_t(n) * GBREC;
+        if (version == 3 ? in.size() != end : in.size() < end) { err = path + ": Gen-1/2-Teil beschädigt"; return false; }
         for (uint32_t i = 0; i < n; i++) {
             const uint8_t* q = &in[gbAt + 4 + i * GBREC];
             uint16_t idx = rd16(q);
@@ -671,6 +904,39 @@ bool Bank::load(const std::string& path, std::string& err) {
             e->hasGb = true;
             e->gbKey = rd32(q + 2);
             e->gb = gbFromRaw(q[6], q + 8, q[7], q + 56, q + 67);
+        }
+        if (version >= 4) {
+            const uint8_t* q = &in[end];
+            const uint8_t* qe = in.data() + in.size();
+            auto bad = [&](size_t need) { return size_t(qe - q) < need; };
+            if (bad(12)) { err = path + ": Teil 4 beschädigt"; return false; }
+            currentLow = rd32(q);
+            currentMedia = q[4];
+            moneyWritten = rd32(q + 8);
+            q += 12;
+            auto getList = [&](std::vector<uint64_t>& v) {
+                if (bad(4)) return false;
+                uint32_t k = rd32(q);
+                q += 4;
+                if (bad(size_t(k) * 8)) return false;
+                for (uint32_t i = 0; i < k; i++, q += 8) v.push_back(uint64_t(rd32(q)) | (uint64_t(rd32(q + 4)) << 32));
+                std::sort(v.begin(), v.end());
+                return true;
+            };
+            if (!getList(seen) || !getList(seenGb) || bad(4)) { err = path + ": Teil 4 beschädigt"; return false; }
+            uint32_t k = rd32(q);
+            q += 4;
+            if (bad(size_t(k) * 40)) { err = path + ": Teil 4 beschädigt"; return false; }
+            for (uint32_t i = 0; i < k; i++, q += 40) {
+                BankSlot s;
+                s.lowId = rd32(q);
+                s.media = q[4];
+                s.gen = q[5];
+                s.trainer.tid = rd16(q + 6);
+                s.trainer.sid = rd16(q + 8);
+                s.trainer.name.assign(reinterpret_cast<const char*>(q + 12), strnlen(reinterpret_cast<const char*>(q + 12), 28));
+                slots.push_back(s);
+            }
         }
     }
     return true;

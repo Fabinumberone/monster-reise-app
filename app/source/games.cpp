@@ -57,26 +57,16 @@ bool emuExists(const Game& g) {
     return true;
 }
 
-// Spielstand-Archiv auf der Konsole öffnen (SD, dann Modul).
-bool openArchive(const Game& g, FS_Archive& arch, FS_MediaType& usedMedia) {
-    for (FS_MediaType m : {MEDIATYPE_SD, MEDIATYPE_GAME_CARD}) {
-        u32 path[3] = {u32(m), g.lowId, HIGH_ID};
-        FS_Path fp = {PATH_BINARY, sizeof path, path};
-        if (R_SUCCEEDED(FSUSER_OpenArchive(&arch, ARCHIVE_USER_SAVEDATA, fp))) {
-            usedMedia = m;
-            return true;
-        }
-    }
-    return false;
+// Spielstand-Archiv auf der Konsole öffnen.
+bool openArchive(const Game& g, FS_MediaType m, FS_Archive& arch) {
+    u32 path[3] = {u32(m), g.lowId, HIGH_ID};
+    FS_Path fp = {PATH_BINARY, sizeof path, path};
+    return R_SUCCEEDED(FSUSER_OpenArchive(&arch, ARCHIVE_USER_SAVEDATA, fp));
 }
 
-} // namespace
-
-bool hasSave(const Game& g) {
-    if (emuExists(g)) return true;
+bool archiveHasFile(const Game& g, FS_MediaType m) {
     FS_Archive a;
-    FS_MediaType m;
-    if (!openArchive(g, a, m)) return false;
+    if (!openArchive(g, m, a)) return false;
     Handle h;
     bool ok = R_SUCCEEDED(FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, (std::string("/") + g.saveFile).c_str()), FS_OPEN_READ, 0));
     if (ok) FSFILE_Close(h);
@@ -84,8 +74,21 @@ bool hasSave(const Game& g) {
     return ok;
 }
 
-bool readSave(const Game& g, std::vector<u8>& out, std::string& err) {
-    if (emuExists(g)) {
+} // namespace
+
+std::vector<SaveSlot> findSaves() {
+    std::vector<SaveSlot> out;
+    for (auto& g : allGames()) {
+        if (emuExists(g)) { out.push_back({&g, MEDIATYPE_SD}); continue; } // Azahar: nur die Emulator-SD
+        if (archiveHasFile(g, MEDIATYPE_SD)) out.push_back({&g, MEDIATYPE_SD});
+        if (g.gen >= 6 && archiveHasFile(g, MEDIATYPE_GAME_CARD)) out.push_back({&g, MEDIATYPE_GAME_CARD});
+    }
+    return out;
+}
+
+bool readSave(const SaveSlot& s, std::vector<u8>& out, std::string& err) {
+    const Game& g = *s.game;
+    if (!s.cart() && emuExists(g)) {
         FILE* f = std::fopen(emuPath(g).c_str(), "rb");
         std::fseek(f, 0, SEEK_END);
         long n = std::ftell(f);
@@ -97,11 +100,10 @@ bool readSave(const Game& g, std::vector<u8>& out, std::string& err) {
         return ok;
     }
     FS_Archive a;
-    FS_MediaType m;
-    if (!openArchive(g, a, m)) { err = "Spielstand-Archiv nicht zugänglich"; return false; }
+    if (!openArchive(g, s.media, a)) { err = s.label() + ": Spielstand-Archiv nicht zugänglich"; return false; }
     Handle h;
     Result r = FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, (std::string("/") + g.saveFile).c_str()), FS_OPEN_READ, 0);
-    if (R_FAILED(r)) { FSUSER_CloseArchive(a); err = "Datei main fehlt"; return false; }
+    if (R_FAILED(r)) { FSUSER_CloseArchive(a); err = s.label() + ": Spielstand fehlt"; return false; }
     u64 size = 0;
     FSFILE_GetSize(h, &size);
     out.resize(size_t(size));
@@ -113,8 +115,9 @@ bool readSave(const Game& g, std::vector<u8>& out, std::string& err) {
     return true;
 }
 
-bool writeSave(const Game& g, const std::vector<u8>& data, std::string& err) {
-    if (emuExists(g)) {
+bool writeSave(const SaveSlot& s, const std::vector<u8>& data, std::string& err) {
+    const Game& g = *s.game;
+    if (!s.cart() && emuExists(g)) {
         FILE* f = std::fopen(emuPath(g).c_str(), "r+b"); // vorhandene Datei überschreiben
         if (!f) { err = "Kann Spielstand nicht öffnen"; return false; }
         bool ok = std::fwrite(data.data(), 1, data.size(), f) == data.size();
@@ -123,8 +126,7 @@ bool writeSave(const Game& g, const std::vector<u8>& data, std::string& err) {
         return ok;
     }
     FS_Archive a;
-    FS_MediaType m;
-    if (!openArchive(g, a, m)) { err = "Spielstand-Archiv nicht zugänglich"; return false; }
+    if (!openArchive(g, s.media, a)) { err = "Spielstand-Archiv nicht zugänglich"; return false; }
     Handle h;
     Result r = FSUSER_OpenFile(&h, a, fsMakePath(PATH_ASCII, (std::string("/") + g.saveFile).c_str()), FS_OPEN_WRITE, 0);
     if (R_FAILED(r)) { FSUSER_CloseArchive(a); err = "Kann Spielstand nicht öffnen"; return false; }
@@ -137,19 +139,19 @@ bool writeSave(const Game& g, const std::vector<u8>& data, std::string& err) {
     return true;
 }
 
-bool launchGame(const Game& g) {
-    u64 tid = (u64(HIGH_ID) << 32) | g.lowId;
+bool launchGame(const SaveSlot& s) {
+    u64 tid = (u64(HIGH_ID) << 32) | s.game->lowId;
     // Läuft das Home-Menü (echte Konsole), springt libctru beim Beenden über den Chainloader.
     // Ohne Home-Menü (Azahar startet die App direkt) nähme libctru einen Luma3DS-Umweg, der im
     // Emulator nicht existiert. Dann lösen wir den Sprung selbst aus; Azahar startet das Spiel
     // in diesem Fall per „RebootToTitle“.
     bool homeMenu = false;
     if (R_SUCCEEDED(APT_IsRegistered(aptGetMenuAppID(), &homeMenu)) && homeMenu) {
-        aptSetChainloader(tid, MEDIATYPE_SD);
+        aptSetChainloader(tid, s.media);
         return true;
     }
     static u8 param[0x300] = {};
     static u8 hmac[0x20] = {};
-    if (R_FAILED(APT_PrepareToDoApplicationJump(0, tid, MEDIATYPE_SD))) return false;
+    if (R_FAILED(APT_PrepareToDoApplicationJump(0, tid, s.media))) return false;
     return R_SUCCEEDED(APT_DoApplicationJump(param, sizeof param, hmac));
 }

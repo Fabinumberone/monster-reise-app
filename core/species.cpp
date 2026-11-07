@@ -31,6 +31,7 @@ bool SpeciesData::load(const std::string& path) {
         i.catchRate = p[13];
         std::memcpy(i.base2.data(), p + 14, 6);
         std::memcpy(i.base7.data(), p + 20, 6);
+        if (rec >= 28) i.family = uint16_t(p[26] | (p[27] << 8));
     }
     return true;
 }

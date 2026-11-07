@@ -6,12 +6,13 @@
 // Nicht mitgeliefert, nicht committet, liegt nur auf der SD.
 //   node tools/gen-arten.mjs [um-dump] [ausgabe]
 //
-// arten.bin: "PW3DARTN", u32 1, u16 Arten (807), u16 Satzgröße (26), dann je Art 0..807:
+// arten.bin: "PW3DARTN", u32 2, u16 Arten (807), u16 Satzgröße (28), dann je Art 0..807:
 //   u8 Wachstum, u8 Geschlecht (0 nur ♂ … 254 nur ♀, 255 keins), u8 Fähigkeit 1, 2, versteckt,
 //   u8 Grundfreundschaft,
 //   Gen 1 (0 wenn unbekannt): u8 KP, Ang, Ver, Init, Spez, u8 Typ 1, Typ 2, u8 Fangrate,
 //   Gen 2: u8 KP, Ang, Ver, Init, SpAng, SpVer,
-//   Gen 7: u8 KP, Ang, Ver, Init, SpAng, SpVer (Basiswerte).
+//   Gen 7: u8 KP, Ang, Ver, Init, SpAng, SpVer (Basiswerte),
+//   u16 Familie (Grundart der Entwicklungsreihe, aus der Entwicklungstabelle a/0/1/4).
 import fs from 'node:fs';
 import path from 'node:path';
 import { readGarc } from './lib/garc.mjs';
@@ -21,9 +22,20 @@ const root = path.join(import.meta.dirname, '..');
 const dump = process.argv[2] ?? path.join(root, 'extracted', 'um');
 const sd = path.join(process.env.APPDATA, 'Azahar', 'sdmc');
 const out = process.argv[3] ?? path.join(sd, 'pokemon-world-3d', 'arten.bin');
-const SPECIES = 807, REC = 26;
+const SPECIES = 807, REC = 28;
 
 const pers = readGarc(path.join(dump, 'romfs', 'a', '0', '1', '7'));
+// Entwicklungen: je Art 8 × 8 Byte (u16 Methode, u16 Parameter, u16 Zielart, s8 Form, u8 Level)
+const evo = readGarc(path.join(dump, 'romfs', 'a', '0', '1', '4'));
+const parent = new Array(SPECIES + 1).fill(0);
+for (let s = 1; s <= SPECIES; s++)
+  for (let i = 0; i < 8; i++) {
+    const e = evo[s][0].subarray(i * 8, i * 8 + 8);
+    const t = e.readUInt16LE(4);
+    if (e.readUInt16LE(0) && t && t <= SPECIES && t !== s && !parent[t]) parent[t] = s;
+  }
+const family = s => { let f = s, n = 0; while (parent[f] && n++ < 5) f = parent[f]; return f; };
+if (family(3) !== 1 || family(26) !== 172 || family(186) !== 60) throw new Error('Entwicklungstabelle passt nicht');
 
 // Gen-1/2-ROMs in den installierten VC-Titeln suchen
 function findRoms() {
@@ -63,7 +75,7 @@ console.log('Gen-2-ROM:', gen2 ? `${gen2.title} ${gen2.name}` : 'keine gefunden'
 
 const outBuf = Buffer.alloc(16 + (SPECIES + 1) * REC);
 outBuf.write('PW3DARTN', 0, 'latin1');
-outBuf.writeUInt32LE(1, 8);
+outBuf.writeUInt32LE(2, 8);
 outBuf.writeUInt16LE(SPECIES, 12);
 outBuf.writeUInt16LE(REC, 14);
 for (let s = 1; s <= SPECIES; s++) {
@@ -72,6 +84,7 @@ for (let s = 1; s <= SPECIES; s++) {
   outBuf[o + 2] = p[0x18]; outBuf[o + 3] = p[0x19]; outBuf[o + 4] = p[0x1a];
   outBuf[o + 5] = p[0x14];
   p.copy(outBuf, o + 20, 0, 6); // Gen-7-Basiswerte: KP, Ang, Ver, Init, SpAng, SpVer
+  outBuf.writeUInt16LE(family(s), o + 26);
   if (gen1 && s <= 151) {
     const e = s === 151 ? gen1.mew : gen1.table + (s - 1) * 28;
     if (gen1.data[e] !== s) throw new Error(`Gen-1-Tabelle passt nicht bei Art ${s}`);

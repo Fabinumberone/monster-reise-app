@@ -5,8 +5,8 @@
 // Zugriff auf den Spielstand:
 //  1. Azahar: Die Emulator-SD enthält die Spielstände als normale Dateien unter
 //     sdmc:/Nintendo 3DS/<0…0>/<0…0>/title/00040000/<id>/data/00000001/<datei>.
-//  2. Echter 3DS: Spielstand-Archiv des Systems (ARCHIVE_USER_SAVEDATA, wie Checkpoint),
-//     zuerst SD-Installation, dann Modul. Nach dem Schreiben wird festgeschrieben (Commit).
+//  2. Echter 3DS: Spielstand-Archiv des Systems (ARCHIVE_USER_SAVEDATA, wie Checkpoint), getrennt
+//     für die installierte Fassung (SD) und das Modul. Nach dem Schreiben wird festgeschrieben (Commit).
 #pragma once
 #include <3ds.h>
 
@@ -31,12 +31,21 @@ const Game* gameByLowId(u32 lowId);
 // Kennung für den gemeinsamen Speicher („ORAS“, „XY“, „SM“, „USUM“, „RBY“, „GSC“)
 const char* bankKind(const Game& g);
 
-// Hat dieses Spiel einen lesbaren Spielstand? (installiert und mindestens einmal gespeichert)
-bool hasSave(const Game& g);
+// Ein Spielstand: Spiel + Medium (installiert oder Modul). Modul und installierte Fassung haben
+// getrennte Spielstände.
+struct SaveSlot {
+    const Game* game = nullptr;
+    FS_MediaType media = MEDIATYPE_SD;
+    bool cart() const { return media == MEDIATYPE_GAME_CARD; }
+    std::string label() const { return std::string(game->name) + (cart() ? " (Modul)" : ""); }
+};
 
-bool readSave(const Game& g, std::vector<u8>& out, std::string& err);
-bool writeSave(const Game& g, const std::vector<u8>& data, std::string& err);
+// Alle Spielstände, die sich lesen lassen (installiert/eingelegt und mindestens einmal gespeichert).
+std::vector<SaveSlot> findSaves();
+
+bool readSave(const SaveSlot& s, std::vector<u8>& out, std::string& err);
+bool writeSave(const SaveSlot& s, const std::vector<u8>& data, std::string& err);
 
 // Startet das Spiel: mit Home-Menü beim Beenden der App (Chainloader), ohne Home-Menü
 // (Azahar) sofort per Anwendungssprung. false, wenn der Sprung abgelehnt wurde.
-bool launchGame(const Game& g);
+bool launchGame(const SaveSlot& s);

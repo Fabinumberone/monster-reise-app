@@ -17,6 +17,7 @@ struct SpeciesInfo {
     uint8_t type1 = 0, type2 = 0, catchRate = 0; // Gen 1
     std::array<uint8_t, 6> base2{}; // Gen 2: KP, Ang, Ver, Init, SpAng, SpVer
     std::array<uint8_t, 6> base7{}; // Gen 7: KP, Ang, Ver, Init, SpAng, SpVer
+    uint16_t family = 0;            // Grundart der Entwicklungsreihe (0 = unbekannt)
 };
 
 class SpeciesData {
@@ -24,6 +25,8 @@ public:
     bool load(const std::string& path);
     bool loaded() const { return !info_.empty(); }
     const SpeciesInfo& get(uint16_t s) const { return s < info_.size() ? info_[s] : empty_; }
+    // Grundart der Entwicklungsreihe (Pichu für Raichu); die Art selbst, wenn unbekannt.
+    uint16_t family(uint16_t s) const { uint16_t f = get(s).family; return f ? f : s; }
 
 private:
     std::vector<SpeciesInfo> info_;

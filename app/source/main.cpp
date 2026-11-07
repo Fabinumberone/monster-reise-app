@@ -25,6 +25,7 @@
 #include "items.hpp"
 #include "names.hpp"
 #include "savefile.hpp"
+#include "sync.hpp"
 
 using namespace pw3d;
 
@@ -109,17 +110,18 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Travel, Confirm, Busy, Done, Error };
+enum class Screen { Menu, Info, Travel, Confirm, Busy, Done, Error };
 enum class View { Team, PC, Bag };
 
 struct State {
     Bank bank;   // gemeinsamer Speicher (wie gespeichert)
-    Bank shown;  // Anzeige: Speicher plus aktueller Spielstand (Vorschau einer Abreise)
-    bool bankOk = false;
+    Bank shown;  // Anzeige (nach dem Abgleich gleich bank)
+    bool bankOk = false, loading = true;
     std::string bankErr;
-    std::vector<const Game*> installed;
-    const Game* current = nullptr;
-    const Game* target = nullptr;
+    std::vector<SaveSlot> installed;
+    const SaveSlot* current = nullptr;  // hier ist man gerade (nullptr: neuer Speicher, noch in keinem Spiel)
+    const SaveSlot* target = nullptr;
+    std::vector<std::string> notice;    // Meldungen des Abgleichs beim Start
     Screen screen = Screen::Menu;
     View view = View::Team;
     int box = 0, cursor = 0, bagScroll = 0;
@@ -155,59 +157,116 @@ GBContext gbCtx(const Game& g, const Trainer6& t) {
     return c;
 }
 
-// Vorschau: so, als würde man jetzt aus dem aktuellen Spiel abreisen (Speicher bleibt unverändert).
-void makePreview(State& st) {
-    st.shown = st.bank;
-    if (!st.current) return;
-    std::vector<u8> data;
-    std::string err;
-    if (!readSave(*st.current, data, err)) return;
-    Bank b = st.bank;
-    if (st.current->gen <= 2) {
-        SaveGB s;
-        if (!g_species.loaded() || !s.load(data, err) || !s.checksumValid()) return;
-        if (!b.departGB(s, gbCtx(*st.current, b.trainer), err)) return;
-    } else {
-        auto s = openSave(data, err);
-        if (!s || !s->valid() || !b.depart(*s, err)) return;
-    }
-    st.shown = b;
+bool readFileAll(const char* path, std::vector<u8>& out) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    std::fseek(f, 0, SEEK_END);
+    out.resize(size_t(std::ftell(f)));
+    std::fseek(f, 0, SEEK_SET);
+    bool ok = std::fread(out.data(), 1, out.size(), f) == out.size();
+    std::fclose(f);
+    return ok;
 }
 
+void timeStamp(char* buf, size_t n) {
+    std::time_t now = std::time(nullptr);
+    std::strftime(buf, n, "%Y%m%d-%H%M%S", std::localtime(&now));
+}
+
+// Beim Start: alle Spielstände lesen und mit dem Speicher abgleichen (siehe sync.hpp). In die
+// Spielstände wird dabei nichts geschrieben; der Speicher wird vorher gesichert.
 void loadState(State& st) {
     g_names.load(NAMES);
     g_species.load(SPECIES);
     g_icons.load(ICONS);
-    st.installed.clear();
-    for (auto& g : allGames())
-        if (hasSave(g)) st.installed.push_back(&g);
-    st.bankOk = st.bank.load(BANK, st.bankErr);
+    st.installed = findSaves();
     st.current = nullptr;
-    if (!st.bankOk) return;
-    const Game* last = gameByLowId(readLast());
-    if (last && st.bank.current == bankKind(*last)) st.current = last;
-    if (!st.current)
-        for (const Game* g : st.installed)
-            if (st.bank.current == bankKind(*g)) { st.current = g; break; }
-    makePreview(st);
+    st.bank = Bank{};
+    st.bank.species = &g_species;
+    std::vector<u8> oldFile;
+    bool exists = readFileAll(BANK, oldFile);
+    if (exists) {
+        st.bankOk = st.bank.load(BANK, st.bankErr);
+        st.bank.species = &g_species;
+        if (!st.bankOk) { st.shown = st.bank; st.loading = false; return; } // beschädigt: nichts anfassen
+    }
+    // Aktueller Spielstand: genau gemerkt, sonst zuletzt.txt, sonst das erste passende Spiel.
+    if (!st.bank.current.empty()) {
+        for (auto& s : st.installed)
+            if (st.bank.currentLow && s.game->lowId == st.bank.currentLow && u8(s.media) == st.bank.currentMedia) st.current = &s;
+        u32 last = readLast();
+        if (!st.current)
+            for (auto& s : st.installed)
+                if (s.game->lowId == last && st.bank.current == bankKind(*s.game)) { st.current = &s; break; }
+        if (!st.current)
+            for (auto& s : st.installed)
+                if (st.bank.current == bankKind(*s.game)) { st.current = &s; break; }
+    }
+    std::vector<SyncInput> in;
+    for (auto& s : st.installed) {
+        SyncInput x;
+        x.label = s.label();
+        x.lowId = s.game->lowId;
+        x.media = u8(s.media);
+        x.gen = s.game->gen;
+        x.gbVersion = s.game->gbVersion;
+        x.language = s.game->language;
+        x.current = &s == st.current;
+        x.known = exists && st.bank.fileVersion < 4; // älterer Speicher: Items/Geld sind schon drin
+        std::string err;
+        if (!readSave(s, x.data, err)) { st.notice.push_back(err); continue; }
+        in.push_back(std::move(x));
+    }
+    std::vector<u8> before = exists ? st.bank.serialize() : std::vector<u8>{};
+    SyncReport rep;
+    syncAll(st.bank, in, g_species, g_names, rep);
+    if (st.current) {
+        st.bank.currentLow = st.current->game->lowId;
+        st.bank.currentMedia = u8(st.current->media);
+    }
+    for (auto& l : rep.lines) st.notice.push_back(l);
+    if (!st.bank.hasTrainer()) {
+        st.bankOk = false;
+        st.bankErr = "Keine Spielstände gefunden";
+    } else {
+        st.bankOk = true;
+        if (st.bank.serialize() != before) {
+            mkdir(DIR, 0777);
+            mkdir(BACKUPS, 0777);
+            if (exists) {
+                char stamp[32];
+                timeStamp(stamp, sizeof stamp);
+                std::string p = std::string(BACKUPS) + "/" + stamp + "-speicher-vor-abgleich.bin";
+                if (FILE* f = std::fopen(p.c_str(), "wb")) {
+                    std::fwrite(oldFile.data(), 1, oldFile.size(), f);
+                    std::fclose(f);
+                }
+            }
+            std::string err;
+            if (!st.bank.save(BANK, err)) st.notice.push_back("Speicher nicht gespeichert: " + err);
+        }
+    }
+    st.shown = st.bank;
+    st.loading = false;
+    if (!st.notice.empty()) st.screen = Screen::Info;
 }
 
 // Ist das Pokémon im aktuellen Spiel sichtbar?
 bool visibleHere(const State& st, const PK6& pk) {
     if (!st.current) return true;
-    if (st.current->gen <= 2) return fitsGB(pk, st.current->gen);
-    return fitsIn(pk, st.current->kind);
+    if (st.current->game->gen <= 2) return fitsGB(pk, st.current->game->gen);
+    return fitsIn(pk, st.current->game->kind);
 }
 
 // Wo liegt das Item im aktuellen Spiel? nullptr = dort nicht sichtbar.
 const char* itemPlaceHere(const State& st, uint16_t item) {
     if (!st.current) return "";
-    if (st.current->gen == 1) return modernItemToGen1(item) ? "Beutel" : nullptr;
-    if (st.current->gen == 2) {
+    if (st.current->game->gen == 1) return modernItemToGen1(item) ? "Beutel" : nullptr;
+    if (st.current->game->gen == 2) {
         if (!modernItemToGen2(item) || pouchOf(GameKind::USUM, item) == Pouch::None) return nullptr;
         return (item <= 16 || (item >= 492 && item <= 500)) ? "Ball-Tasche" : "Item-Tasche";
     }
-    Pouch p = pouchOf(st.current->kind, item);
+    Pouch p = pouchOf(st.current->game->kind, item);
     return p == Pouch::None ? nullptr : pouchName(p);
 }
 
@@ -230,8 +289,8 @@ void drawHeader(const State& st) {
     rect(0, 0, 400, 26, C_HEAD);
     text("Pokémon World 3DS", 8, 4, 0.6f, C_WHITE);
     if (st.current) {
-        u32 rc = regionColor(st.current->region);
-        std::string r = std::string(st.current->region) + " · " + st.current->name;
+        u32 rc = regionColor(st.current->game->region);
+        std::string r = std::string(st.current->game->region) + " · " + st.current->label();
         rect(250, 4, 144, 18, rc);
         text(r, 322, 5, 0.45f, C_WHITE, CENTER, 136);
     }
@@ -326,9 +385,13 @@ void drawBag(const State& st) {
 
 void drawTop(const State& st) {
     drawHeader(st);
+    if (st.loading) {
+        text("Lese Spielstände …", 200, 110, 0.6f, C_LIGHT, CENTER);
+        return;
+    }
     if (!st.bankOk) {
-        text("Kein gemeinsamer Speicher gefunden.", 200, 100, 0.55f, C_ERR, CENTER);
-        text("Einrichten am PC: pw3d-reise speicher-neu …", 200, 124, 0.45f, C_LIGHT, CENTER);
+        text("Gemeinsamer Speicher nicht nutzbar:", 200, 100, 0.55f, C_ERR, CENTER);
+        text(st.bankErr, 200, 124, 0.45f, C_LIGHT, CENTER, 380);
         return;
     }
     switch (st.view) {
@@ -359,16 +422,28 @@ const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 constexpr int NREG = 5;
 const char* REGIONS[NREG] = {"Kanto", "Johto", "Hoenn", "Kalos", "Alola"};
 constexpr float COLW = 60, COLGAP = 3, COLX = 4;
+// Ein Knopf je Spiel; gibt es Modul und installierte Fassung, wählt man beim Bestätigen.
 std::vector<std::pair<Button, const Game*>> travelButtons(const State& st) {
     std::vector<std::pair<Button, const Game*>> out;
     for (int r = 0; r < NREG; r++) {
         int n = 0;
-        for (const Game* g : st.installed)
-            if (std::string(g->region) == REGIONS[r])
-                out.push_back({Button{COLX + r * (COLW + COLGAP), 56.0f + n++ * 34, COLW, 30}, g});
+        const Game* prev = nullptr;
+        for (const SaveSlot& s : st.installed)
+            if (std::string(s.game->region) == REGIONS[r] && s.game != prev) {
+                out.push_back({Button{COLX + r * (COLW + COLGAP), 56.0f + n++ * 34, COLW, 30}, s.game});
+                prev = s.game;
+            }
     }
     return out;
 }
+
+const SaveSlot* slotOf(const State& st, const Game* g, FS_MediaType m) {
+    for (auto& s : st.installed)
+        if (s.game == g && s.media == m) return &s;
+    return nullptr;
+}
+
+const Button B_SD{8, 96, 148, 24}, B_CART{164, 96, 148, 24};
 
 void drawBottom(const State& st) {
     rect(0, 0, 320, 26, C_HEAD);
@@ -382,6 +457,14 @@ void drawBottom(const State& st) {
         text("X: Reisen   Y: Ansicht   L/R: Box", 160, 178, 0.4f, C_LIGHT, CENTER);
         button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.55f);
         break;
+    case Screen::Info: {
+        text("Abgleich der Spielstände", 160, 4, 0.55f, C_WHITE, CENTER);
+        float y = 34;
+        for (size_t i = 0; i < st.notice.size() && i < 9; i++, y += 17) text(st.notice[i], 8, y, 0.4f, C_WHITE, LEFT, 304);
+        if (st.notice.size() > 9) text("… und " + std::to_string(st.notice.size() - 9) + " weitere", 8, y, 0.4f, C_LIGHT);
+        button(B_BACK, "Weiter (A)", C_OK, C_WHITE, 0.55f);
+        break;
+    }
     case Screen::Travel: {
         text("Wohin möchtest du reisen?", 160, 4, 0.55f, C_WHITE, CENTER);
         for (int r = 0; r < NREG; r++) {
@@ -389,7 +472,7 @@ void drawBottom(const State& st) {
             text(REGIONS[r], COLX + r * (COLW + COLGAP) + COLW / 2, 33, 0.45f, C_WHITE, CENTER, COLW - 4);
         }
         for (auto& [b, g] : travelButtons(st)) {
-            bool isHere = g == st.current;
+            bool isHere = st.current && g == st.current->game;
             button(b, g->name, isHere ? C_BG2 : C_CARD, isHere ? C_LIGHT : C_TEXT, 0.42f);
             if (isHere) text("hier", b.x + b.w - 4, b.y + 1, 0.32f, C_SEL, RIGHT);
         }
@@ -398,18 +481,27 @@ void drawBottom(const State& st) {
     }
     case Screen::Confirm:
         text("Reise bestätigen", 160, 4, 0.6f, C_WHITE, CENTER);
-        rect(8, 36, 304, 26, regionColor(st.current ? st.current->region : "Alola"));
-        text(std::string("Von: ") + (st.current ? st.current->name : "?") + " (" + (st.current ? st.current->region : "?") + ")", 16, 40, 0.5f, C_WHITE, LEFT, 288);
-        rect(8, 66, 304, 26, regionColor(st.target->region));
-        text(std::string("Nach: ") + st.target->name + " (" + st.target->region + ")", 16, 70, 0.5f, C_WHITE, LEFT, 288);
-        text("Team, PC, Beutel und Geld werden übertragen,", 160, 104, 0.42f, C_LIGHT, CENTER);
-        text("danach startet das Spiel. Vorher wird alles gesichert.", 160, 120, 0.42f, C_LIGHT, CENTER, 300);
-        text("Hast du im aktuellen Spiel gespeichert?", 160, 148, 0.48f, C_SEL, CENTER, 300);
+    {
+        const Game& tg = *st.target->game;
+        rect(8, 36, 304, 26, st.current ? regionColor(st.current->game->region) : C_BG2);
+        text(st.current ? "Von: " + st.current->label() + " (" + st.current->game->region + ")" : std::string("Von: noch in keinem Spiel"),
+             16, 40, 0.5f, C_WHITE, LEFT, 288);
+        rect(8, 66, 304, 26, regionColor(tg.region));
+        text("Nach: " + st.target->label() + " (" + tg.region + ")", 16, 70, 0.5f, C_WHITE, LEFT, 288);
+        bool both = slotOf(st, &tg, MEDIATYPE_SD) && slotOf(st, &tg, MEDIATYPE_GAME_CARD);
+        if (both) {
+            button(B_SD, "Installiert", st.target->cart() ? C_BG2 : C_SEL, st.target->cart() ? C_WHITE : C_TEXT, 0.45f);
+            button(B_CART, "Modul", st.target->cart() ? C_SEL : C_BG2, st.target->cart() ? C_TEXT : C_WHITE, 0.45f);
+        }
+        text("Team, PC, Beutel und Geld werden übertragen,", 160, both ? 126 : 104, 0.42f, C_LIGHT, CENTER);
+        text("danach startet das Spiel. Vorher wird alles gesichert.", 160, both ? 142 : 120, 0.42f, C_LIGHT, CENTER, 300);
+        if (st.current) text("Hast du im aktuellen Spiel gespeichert?", 160, 162, 0.48f, C_SEL, CENTER, 300);
+    }
         button(B_YES, "Reisen (A)", C_OK, C_WHITE, 0.55f);
         button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.55f);
         break;
     case Screen::Busy: {
-        text(std::string("Reise nach ") + st.target->region, 160, 4, 0.6f, C_WHITE, CENTER);
+        text(std::string("Reise nach ") + st.target->game->region, 160, 4, 0.6f, C_WHITE, CENTER);
         float y = 40;
         for (size_t i = 0; i < st.steps.size(); i++, y += 22)
             text((i + 1 < st.steps.size() ? "✓ " : "… ") + st.steps[i], 16, y, 0.48f, i + 1 < st.steps.size() ? C_OK : C_WHITE);
@@ -471,62 +563,57 @@ bool backup(const char* stamp, const std::string& what, const std::vector<u8>& d
 }
 
 bool travel(State& st, std::string& err) {
-    const Game& from = *st.current;
-    const Game& to = *st.target;
+    const SaveSlot* from = st.current; // nullptr: neuer Speicher, nur ankommen
+    const SaveSlot& to = *st.target;
     st.steps.clear();
     st.screen = Screen::Busy;
 
     step("Lese Spielstände");
     std::vector<u8> fromData, toData;
-    if (!readSave(from, fromData, err) || !readSave(to, toData, err)) return false;
+    if ((from && !readSave(*from, fromData, err)) || !readSave(to, toData, err)) return false;
     std::string e;
     // Gen 6/7 über SaveFile, Gen 1/2 über SaveGB
     std::unique_ptr<SaveFile> fromSav, toSav;
     SaveGB fromGB, toGB;
-    auto openAny = [&](const Game& g, const std::vector<u8>& data, std::unique_ptr<SaveFile>& sf, SaveGB& gb) {
-        if (g.gen <= 2) {
-            if (!gb.load(data, e)) { err = std::string(g.name) + ": " + e; return false; }
-            if (!gb.checksumValid()) { err = std::string(g.name) + ": Prüfsumme stimmt nicht"; return false; }
+    auto openAny = [&](const SaveSlot& s, const std::vector<u8>& data, std::unique_ptr<SaveFile>& sf, SaveGB& gb) {
+        if (s.game->gen <= 2) {
+            if (!gb.load(data, e)) { err = s.label() + ": " + e; return false; }
+            if (!gb.checksumValid()) { err = s.label() + ": Prüfsumme stimmt nicht"; return false; }
             return true;
         }
         sf = openSave(data, e);
-        if (!sf) { err = std::string(g.name) + ": " + e; return false; }
-        if (!sf->valid()) { err = std::string(g.name) + ": Prüfsummen stimmen nicht"; return false; }
+        if (!sf) { err = s.label() + ": " + e; return false; }
+        if (!sf->valid()) { err = s.label() + ": Prüfsummen stimmen nicht"; return false; }
         return true;
     };
-    if (!openAny(from, fromData, fromSav, fromGB) || !openAny(to, toData, toSav, toGB)) return false;
-    if ((from.gen <= 2 || to.gen <= 2) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
+    if ((from && !openAny(*from, fromData, fromSav, fromGB)) || !openAny(to, toData, toSav, toGB)) return false;
+    if (((from && from->game->gen <= 2) || to.game->gen <= 2) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
     auto ctxFor = [&](const Game& g) { return gbCtx(g, st.bank.trainer); };
 
     step("Lege Sicherungen an");
     mkdir(DIR, 0777);
     mkdir(BACKUPS, 0777);
     char stamp[32];
-    std::time_t now = std::time(nullptr);
-    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&now));
+    timeStamp(stamp, sizeof stamp);
     std::vector<u8> bankData;
-    if (FILE* bf = std::fopen(BANK, "rb")) {
-        std::fseek(bf, 0, SEEK_END);
-        bankData.resize(size_t(std::ftell(bf)));
-        std::fseek(bf, 0, SEEK_SET);
-        std::fread(bankData.data(), 1, bankData.size(), bf);
-        std::fclose(bf);
-    }
-    if (!backup(stamp, std::string(from.name) + "-" + from.saveFile, fromData) ||
-        !backup(stamp, std::string(to.name) + "-" + to.saveFile, toData) || !backup(stamp, "speicher.bin", bankData)) {
+    readFileAll(BANK, bankData);
+    if ((from && !backup(stamp, from->label() + "-" + from->game->saveFile, fromData)) ||
+        !backup(stamp, to.label() + "-" + to.game->saveFile, toData) || !backup(stamp, "speicher.bin", bankData)) {
         err = "Sicherung fehlgeschlagen";
         return false;
     }
 
     step("Übertrage Pokémon, Items und Geld");
     Bank bank = st.bank;
-    if (from.gen <= 2 ? !bank.departGB(fromGB, ctxFor(from), err) : !bank.depart(*fromSav, err)) return false;
+    if (from && (from->game->gen <= 2 ? !bank.departGB(fromGB, ctxFor(*from->game), err) : !bank.depart(*fromSav, err))) return false;
     int hidden = 0;
-    if (to.gen <= 2 ? !bank.arriveGB(toGB, ctxFor(to), hidden, err) : !bank.arrive(*toSav, hidden, err)) return false;
+    if (to.game->gen <= 2 ? !bank.arriveGB(toGB, ctxFor(*to.game), hidden, err) : !bank.arrive(*toSav, hidden, err)) return false;
+    bank.currentLow = to.game->lowId;
+    bank.currentMedia = u8(to.media);
 
-    step(to.gen == 7 ? "Berechne Prüfsummen und Signatur" : "Berechne Prüfsummen");
+    step(to.game->gen == 7 ? "Berechne Prüfsummen und Signatur" : "Berechne Prüfsummen");
     std::vector<u8> outData;
-    if (to.gen <= 2) {
+    if (to.game->gen <= 2) {
         toGB.finalize();
         SaveGB check;
         if (!check.load(toGB.raw(), e) || !check.checksumValid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
@@ -541,21 +628,21 @@ bool travel(State& st, std::string& err) {
     step("Schreibe Spielstand");
     if (!writeSave(to, outData, err)) return false;
     if (!bank.save(BANK, err)) { err = "Spielstand geschrieben, aber Speicher nicht: " + err; return false; }
-    writeLast(to.lowId);
+    writeLast(to.game->lowId);
     st.bank = bank;
     st.shown = bank;
     st.current = &to;
 
-    st.message = std::to_string(bank.count()) + " Pokémon im Speicher, " + std::to_string(hidden) + " davon in " + to.name +
+    st.message = std::to_string(bank.count()) + " Pokémon im Speicher, " + std::to_string(hidden) + " davon in " + to.label() +
                  " nicht sichtbar.";
     return true;
 }
 
 // ---------- Eingabe ----------
 void startTravel(State& st) {
-    if (!st.bankOk || !st.current) {
+    if (!st.bankOk || (!st.current && !st.bank.current.empty())) {
         st.message = std::string("Reisen nicht möglich\n") +
-                     (st.bankOk ? "Das aktuelle Spiel (" + st.bank.current + ") hat keinen Spielstand." : "Kein gemeinsamer Speicher.");
+                     (st.bankOk ? "Das aktuelle Spiel (" + st.bank.current + ") hat keinen lesbaren Spielstand." : st.bankErr);
         st.screen = Screen::Error;
     } else {
         st.screen = Screen::Travel;
@@ -577,7 +664,7 @@ void doLaunch(State& st) {
         st.quit = true;
     } else {
         st.message = std::string("Spiel konnte nicht gestartet werden\nDie Reise ist erledigt.\nBitte starte ") +
-                     st.target->name + " selbst.";
+                     st.target->label() + " selbst.";
         st.screen = Screen::Error;
     }
 }
@@ -605,6 +692,9 @@ void input(State& st, u32 down, const touchPosition& t) {
     }
 
     switch (st.screen) {
+    case Screen::Info:
+        if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.screen = Screen::Menu;
+        break;
     case Screen::Menu:
         if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) startTravel(st);
         else if (touch && B_TEAM.hit(t)) st.view = View::Team;
@@ -616,10 +706,21 @@ void input(State& st, u32 down, const touchPosition& t) {
         if ((touch && B_BACK.hit(t)) || (down & KEY_B)) { st.screen = Screen::Menu; break; }
         if (touch)
             for (auto& [b, g] : travelButtons(st))
-                if (b.hit(t)) { st.target = g; st.screen = Screen::Confirm; }
+                if (b.hit(t)) {
+                    // Standard: das Medium, das man gerade nutzt, sonst installiert
+                    const SaveSlot* sd = slotOf(st, g, MEDIATYPE_SD);
+                    const SaveSlot* cart = slotOf(st, g, MEDIATYPE_GAME_CARD);
+                    bool preferCart = st.current && st.current->cart();
+                    st.target = (preferCart && cart) ? cart : (sd ? sd : cart);
+                    st.screen = Screen::Confirm;
+                }
         break;
     case Screen::Confirm:
-        if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Travel;
+        if (touch && B_SD.hit(t) && slotOf(st, st.target->game, MEDIATYPE_SD) && slotOf(st, st.target->game, MEDIATYPE_GAME_CARD))
+            st.target = slotOf(st, st.target->game, MEDIATYPE_SD);
+        else if (touch && B_CART.hit(t) && slotOf(st, st.target->game, MEDIATYPE_GAME_CARD) && slotOf(st, st.target->game, MEDIATYPE_SD))
+            st.target = slotOf(st, st.target->game, MEDIATYPE_GAME_CARD);
+        else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Travel;
         else if ((touch && B_YES.hit(t)) || (down & KEY_A)) doTravel(st);
         break;
     case Screen::Done:
