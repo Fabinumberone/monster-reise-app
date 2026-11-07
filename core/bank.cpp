@@ -119,6 +119,14 @@ BankEntry* Bank::freeBoxSlot(std::vector<BankEntry>& bx) {
     return nullptr;
 }
 
+void Bank::leave() {
+    for (auto& e : party) e.inGame = false;
+    for (auto& e : boxes) e.inGame = false;
+    for (auto& b : items) b.written = 0;
+    moneyWritten = 0;
+    current.clear();
+}
+
 int Bank::count() const {
     int n = 0;
     for (auto& e : party) n += e.used;
@@ -720,6 +728,7 @@ bool Bank::arriveGB(SaveGB& sav, const GBContext& ctx, int& hidden, std::string&
 // Version 3 hängt zusätzlich an: u32 Anzahl Gen-1/2-Stände, je Stand u16 Eintrag (0–5 Team,
 // danach Boxplätze), u32 Schlüssel, u8 Generation, u8 Länge, 48 Byte Datensatz, 11 Byte OT-Name,
 // 11 Byte Spitzname (Spiel-Zeichensatz).
+// Version 5: wie 4, aber 100 statt 32 Boxen.
 // Version 4 hängt zusätzlich an: u32 aktueller Spielstand (untere Title-ID), u8 Medium, 3 frei,
 // u32 ins aktuelle Spiel geschriebenes Geld,
 // u32 Anzahl gesehener Pokémon, je u64 (EC·2^32 + PID), u32 Anzahl gesehener Gen-1/2-Pokémon,
@@ -736,7 +745,7 @@ constexpr size_t GBREC = 2 + 4 + 1 + 1 + 48 + 11 + 11;
 std::vector<uint8_t> Bank::serialize() const {
     std::vector<uint8_t> out(HEADER + (PARTY + BOXES * SLOTS) * ENTRY, 0);
     std::memcpy(out.data(), MAGIC, 8);
-    wr32(&out[8], 4);
+    wr32(&out[8], 5);
     wr16(&out[12], trainer.tid);
     wr16(&out[14], trainer.sid);
     out[16] = trainer.gender;
@@ -841,12 +850,13 @@ bool Bank::load(const std::string& path, std::string& err) {
     std::ifstream f(path, std::ios::binary);
     if (!f) { err = "Kann " + path + " nicht lesen"; return false; }
     std::vector<uint8_t> in((std::istreambuf_iterator<char>(f)), {});
-    const size_t base = HEADER + (PARTY + BOXES * SLOTS) * ENTRY;
     uint32_t version = in.size() >= 12 ? rd32(&in[8]) : 0;
+    const int fileBoxes = version >= 5 ? BOXES : OLD_BOXES;
+    const size_t base = HEADER + (PARTY + size_t(fileBoxes) * SLOTS) * ENTRY;
     fileVersion = version;
-    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 4 ||
+    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 5 ||
         (version == 1 && in.size() != base) || (version >= 2 && in.size() < base + 12)) {
-        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 4)";
+        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 5)";
         return false;
     }
     items.clear();
@@ -883,7 +893,7 @@ bool Bank::load(const std::string& path, std::string& err) {
     };
     for (auto& e : party) get(e);
     boxes.assign(BOXES * SLOTS, BankEntry{});
-    for (auto& e : boxes) get(e);
+    for (int i = 0; i < fileBoxes * SLOTS; i++) get(boxes[size_t(i)]);
 
     currentLow = 0;
     currentMedia = 0;
@@ -905,7 +915,7 @@ bool Bank::load(const std::string& path, std::string& err) {
             e->gbKey = rd32(q + 2);
             e->gb = gbFromRaw(q[6], q + 8, q[7], q + 56, q + 67);
         }
-        if (version >= 4) {
+        if (version >= 4) { // Version 5: wie 4, aber 100 Boxen
             const uint8_t* q = &in[end];
             const uint8_t* qe = in.data() + in.size();
             auto bad = [&](size_t need) { return size_t(qe - q) < need; };

@@ -1,8 +1,9 @@
 // Pokémon World 3DS – Reise-App mit grafischer Oberfläche (citro2d, Systemschrift).
 // Oben: Kopf mit Trainer und Region, darunter Team, PC oder Beutel.
 // Unten: Touch-Menü, Regionswahl und Reiseablauf.
-// Tasten: Steuerkreuz bewegt die Auswahl oben (PC/Beutel), L/R wechselt die Box,
-//         Y wechselt die Ansicht, X öffnet „Reisen“, A/B bestätigen/abbrechen, START beendet.
+// Tasten: Steuerkreuz bewegt die Auswahl oben (Team/PC/Beutel), L/R wechselt die Box,
+//         A nimmt ein Pokémon auf bzw. legt es ab (tauscht), B bricht ab,
+//         Y wechselt die Ansicht, X öffnet „Reisen“, START beendet.
 #include <3ds.h>
 #include <citro2d.h>
 
@@ -110,13 +111,16 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Info, Travel, Confirm, Busy, Done, Error };
+enum class Screen { Menu, Info, SaveMoves, Travel, Confirm, Busy, Done, Error };
 enum class View { Team, PC, Bag };
 
 struct State {
     Bank bank;   // gemeinsamer Speicher (wie gespeichert)
-    Bank shown;  // Anzeige (nach dem Abgleich gleich bank)
     bool bankOk = false, loading = true;
+    bool synced = false;  // aktueller Spielstand beim Start übernommen (Reisen ohne erneutes Lesen)
+    bool dirty = false;   // in der App umgeräumt, noch nicht ins Spiel übernommen
+    int held = -1;        // aufgenommenes Pokémon: 0–5 Team, ab 6 Boxplatz (6 + Index)
+    int teamCursor = 0;
     std::string bankErr;
     std::vector<SaveSlot> installed;
     const SaveSlot* current = nullptr;  // hier ist man gerade (nullptr: neuer Speicher, noch in keinem Spiel)
@@ -188,7 +192,7 @@ void loadState(State& st) {
     if (exists) {
         st.bankOk = st.bank.load(BANK, st.bankErr);
         st.bank.species = &g_species;
-        if (!st.bankOk) { st.shown = st.bank; st.loading = false; return; } // beschädigt: nichts anfassen
+        if (!st.bankOk) { st.loading = false; return; } // beschädigt: nichts anfassen
     }
     // Aktueller Spielstand: genau gemerkt, sonst zuletzt.txt, sonst das erste passende Spiel.
     if (!st.bank.current.empty()) {
@@ -246,7 +250,7 @@ void loadState(State& st) {
             if (!st.bank.save(BANK, err)) st.notice.push_back("Speicher nicht gespeichert: " + err);
         }
     }
-    st.shown = st.bank;
+    st.synced = rep.currentSynced;
     st.loading = false;
     if (!st.notice.empty()) st.screen = Screen::Info;
 }
@@ -257,6 +261,24 @@ bool visibleHere(const State& st, const PK6& pk) {
     if (st.current->game->gen <= 2) return fitsGB(pk, st.current->game->gen);
     return fitsIn(pk, st.current->game->kind);
 }
+
+// Boxen des Spiels (Gen 1/2: Plätze zu je 20, linear über die Speicherboxen verteilt).
+int gameBoxes(const Game& g) {
+    if (g.gen == 1) return 12;
+    if (g.gen == 2) return 14;
+    return (g.kind == GameKind::XY || g.kind == GameKind::ORAS) ? 31 : 32;
+}
+
+// Liegt dieser Boxplatz (Index in bank.boxes) im aktuellen Spiel in einer Box?
+bool slotVisibleHere(const State& st, int idx) {
+    if (!st.current) return true;
+    const Game& g = *st.current->game;
+    if (g.gen <= 2) return idx < gameBoxes(g) * 20;
+    return idx / Bank::SLOTS < gameBoxes(g);
+}
+
+BankEntry& entryAt(State& st, int pos) { return pos < Bank::PARTY ? st.bank.party[size_t(pos)] : st.bank.boxes[size_t(pos - Bank::PARTY)]; }
+const BankEntry& entryAt(const State& st, int pos) { return pos < Bank::PARTY ? st.bank.party[size_t(pos)] : st.bank.boxes[size_t(pos - Bank::PARTY)]; }
 
 // Wo liegt das Item im aktuellen Spiel? nullptr = dort nicht sichtbar.
 const char* itemPlaceHere(const State& st, uint16_t item) {
@@ -296,61 +318,67 @@ void drawHeader(const State& st) {
     }
     rect(0, 26, 400, 18, C_BG2);
     if (st.bankOk) {
-        const Trainer6& t = st.shown.trainer;
-        text(t.name + "   ID " + std::to_string(t.tid) + "   Geld " + money(st.shown.money), 8, 28, 0.45f, C_LIGHT);
-        text(std::to_string(st.shown.count()) + " Pokémon", 392, 28, 0.45f, C_LIGHT, RIGHT);
+        const Trainer6& t = st.bank.trainer;
+        text(t.name + "   ID " + std::to_string(t.tid) + "   Geld " + money(st.bank.money), 8, 28, 0.45f, C_LIGHT);
+        text(std::to_string(st.bank.count()) + " Pokémon", 392, 28, 0.45f, C_LIGHT, RIGHT);
     }
 }
 
 void drawTeam(const State& st) {
-    int n = 0;
     for (int i = 0; i < Bank::PARTY; i++) {
-        const BankEntry& e = st.shown.party[i];
-        if (!e.used) continue;
-        float x = 8 + (n % 2) * 196, y = 50 + (n / 2) * 62;
-        n++;
-        bool vis = visibleHere(st, e.pk);
-        rect(x, y, 188, 58, vis ? C_CARD : C_CARD_DIM);
-        drawIcon(e.pk, x + 2, y + 4, 1.0f, !vis);
-        text(monName(e.pk), x + 46, y + 3, 0.52f, C_TEXT, LEFT, 110);
-        if (!e.pk.isEgg()) {
-            text("Lv. " + std::to_string(e.pk.partyLevel()), x + 46, y + 21, 0.42f, C_MUTED);
-            if (e.pk.gender() < 2)
-                text(e.pk.gender() == 0 ? "♂" : "♀", x + 180, y + 3, 0.55f, e.pk.gender() == 0 ? C_MALE : C_FEMALE, RIGHT);
-            if (e.pk.isShiny()) text("★", x + 162, y + 3, 0.5f, C_SEL, RIGHT);
-        }
-        if (!vis) {
-            text("hier nicht sichtbar", x + 46, y + 38, 0.42f, C_TEXT);
+        const BankEntry& e = st.bank.party[size_t(i)];
+        float x = 8 + (i % 2) * 196, y = 50 + (i / 2) * 62;
+        if (!e.used) {
+            rect(x, y, 188, 58, C_BG2);
+            text("leer", x + 94, y + 20, 0.45f, C_LIGHT, CENTER);
         } else {
-            u16 hp = rd16(e.pk.d.data() + 0xF0), maxHp = rd16(e.pk.d.data() + 0xF2);
-            float f = maxHp ? std::min(1.0f, float(hp) / maxHp) : 0;
-            u32 hc = f > 0.5f ? C_OK : f > 0.2f ? C_SEL : C_ERR;
-            rect(x + 46, y + 42, 100, 8, C2D_Color32(0xD8, 0xD3, 0xC8, 0xFF));
-            rect(x + 46, y + 42, 100 * f, 8, hc);
-            text(std::to_string(hp) + "/" + std::to_string(maxHp), x + 182, y + 38, 0.4f, C_MUTED, RIGHT);
+            bool vis = visibleHere(st, e.pk);
+            rect(x, y, 188, 58, vis ? C_CARD : C_CARD_DIM);
+            drawIcon(e.pk, x + 2, y + 4, 1.0f, !vis);
+            text(monName(e.pk), x + 46, y + 3, 0.52f, C_TEXT, LEFT, 110);
+            if (!e.pk.isEgg()) {
+                text("Lv. " + std::to_string(e.pk.partyLevel()), x + 46, y + 21, 0.42f, C_MUTED);
+                if (e.pk.gender() < 2)
+                    text(e.pk.gender() == 0 ? "♂" : "♀", x + 180, y + 3, 0.55f, e.pk.gender() == 0 ? C_MALE : C_FEMALE, RIGHT);
+                if (e.pk.isShiny()) text("★", x + 162, y + 3, 0.5f, C_SEL, RIGHT);
+            }
+            if (!vis) {
+                text("hier nicht sichtbar", x + 46, y + 38, 0.42f, C_TEXT);
+            } else {
+                u16 hp = rd16(e.pk.d.data() + 0xF0), maxHp = rd16(e.pk.d.data() + 0xF2);
+                float fr = maxHp ? std::min(1.0f, float(hp) / maxHp) : 0;
+                u32 hc = fr > 0.5f ? C_OK : fr > 0.2f ? C_SEL : C_ERR;
+                rect(x + 46, y + 42, 100, 8, C2D_Color32(0xD8, 0xD3, 0xC8, 0xFF));
+                rect(x + 46, y + 42, 100 * fr, 8, hc);
+                text(std::to_string(hp) + "/" + std::to_string(maxHp), x + 182, y + 38, 0.4f, C_MUTED, RIGHT);
+            }
         }
+        if (st.held == i) frame(x, y, 188, 58, C_ERR, 3);
+        if (i == st.teamCursor) frame(x, y, 188, 58, C_SEL);
     }
-    if (!n) text("Kein Pokémon im Team", 200, 120, 0.6f, C_LIGHT, CENTER);
 }
 
 void drawPC(const State& st) {
     text("◀  Box " + std::to_string(st.box + 1) + "  ▶", 146, 48, 0.55f, C_WHITE, CENTER);
-    text("L / R", 146, 66, 0.38f, C_LIGHT, CENTER);
+    bool boxHidden = st.current && !slotVisibleHere(st, st.box * Bank::SLOTS);
+    text(boxHidden ? "nur im Speicher (L / R)" : "L / R", 146, 66, 0.38f, boxHidden ? C_SEL : C_LIGHT, CENTER);
     for (int s = 0; s < Bank::SLOTS; s++) {
-        const BankEntry& e = st.shown.boxes[st.box * Bank::SLOTS + s];
+        const BankEntry& e = st.bank.boxes[st.box * Bank::SLOTS + s];
         float x = 8 + (s % 6) * 46, y = 82 + (s / 6) * 31;
         rect(x, y, 44, 29, C_BG2);
-        if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !visibleHere(st, e.pk));
+        int idx = st.box * Bank::SLOTS + s;
+        if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !visibleHere(st, e.pk) || !slotVisibleHere(st, idx));
+        if (st.held == Bank::PARTY + idx) frame(x, y, 44, 29, C_ERR, 3);
         if (s == st.cursor) frame(x, y, 44, 29, C_SEL);
     }
     // Detailansicht rechts
-    const BankEntry& sel = st.shown.boxes[st.box * Bank::SLOTS + st.cursor];
+    const BankEntry& sel = st.bank.boxes[st.box * Bank::SLOTS + st.cursor];
     rect(290, 48, 102, 188, C_CARD);
     if (!sel.used) {
         text("leer", 341, 130, 0.5f, C_MUTED, CENTER);
         return;
     }
-    bool vis = visibleHere(st, sel.pk);
+    bool vis = visibleHere(st, sel.pk) && slotVisibleHere(st, st.box * Bank::SLOTS + st.cursor);
     drawIcon(sel.pk, 301, 52, 2.0f, !vis);
     text(monName(sel.pk), 341, 114, 0.5f, C_TEXT, CENTER, 96);
     if (!sel.pk.isEgg() && g_names.species(sel.pk.species()) != monName(sel.pk))
@@ -366,11 +394,11 @@ constexpr int BAG_ROWS = 10;
 void drawBag(const State& st) {
     text("Beutel", 8, 48, 0.55f, C_WHITE);
     text("nur Taschen, die mitreisen", 392, 50, 0.4f, C_LIGHT, RIGHT);
-    if (st.shown.items.empty()) { text("leer", 200, 130, 0.6f, C_LIGHT, CENTER); return; }
+    if (st.bank.items.empty()) { text("leer", 200, 130, 0.6f, C_LIGHT, CENTER); return; }
     for (int r = 0; r < BAG_ROWS; r++) {
         int i = st.bagScroll + r;
-        if (i >= int(st.shown.items.size())) break;
-        const BankItem& b = st.shown.items[size_t(i)];
+        if (i >= int(st.bank.items.size())) break;
+        const BankItem& b = st.bank.items[size_t(i)];
         const char* place = itemPlaceHere(st, b.item);
         float y = 70 + r * 17;
         rect(8, y, 384, 16, r % 2 ? C_BG2 : C_BG);
@@ -379,7 +407,7 @@ void drawBag(const State& st) {
         text("× " + std::to_string(b.count), 280, y + 1, 0.45f, c, RIGHT);
         text(place ? place : "hier nicht sichtbar", 386, y + 2, 0.4f, place ? C_LIGHT : C_ERR, RIGHT);
     }
-    if (st.shown.items.size() > size_t(BAG_ROWS))
+    if (st.bank.items.size() > size_t(BAG_ROWS))
         text("▲▼ blättern", 392, 242 - 18, 0.38f, C_LIGHT, RIGHT);
 }
 
@@ -399,7 +427,10 @@ void drawTop(const State& st) {
     case View::PC: drawPC(st); break;
     case View::Bag: drawBag(st); break;
     }
-    if (!g_icons.loaded() || !g_names.loaded())
+    if (st.held >= 0 && st.view != View::Bag) {
+        rect(0, 222, 400, 18, C_HEAD);
+        text("Aufgenommen: " + monName(entryAt(st, st.held).pk) + "  –  A legt ab (tauscht), B bricht ab", 200, 223, 0.42f, C_WHITE, CENTER, 392);
+    } else if (!g_icons.loaded() || !g_names.loaded())
         text(std::string(!g_icons.loaded() ? "icons.bin" : "namen.txt") + " fehlt auf der SD", 392, 226, 0.36f, C_ERR, RIGHT);
 }
 
@@ -454,7 +485,7 @@ void drawBottom(const State& st) {
         button(B_TEAM, "Team", st.view == View::Team ? C_SEL : C_BG2, st.view == View::Team ? C_TEXT : C_WHITE, 0.7f);
         button(B_PC, "PC", st.view == View::PC ? C_SEL : C_BG2, st.view == View::PC ? C_TEXT : C_WHITE, 0.7f);
         button(B_BAG, "Beutel", st.view == View::Bag ? C_SEL : C_BG2, st.view == View::Bag ? C_TEXT : C_WHITE, 0.7f);
-        text("X: Reisen   Y: Ansicht   L/R: Box", 160, 178, 0.4f, C_LIGHT, CENTER);
+        text("X: Reisen  Y: Ansicht  L/R: Box  A: umräumen", 160, 178, 0.4f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
         button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.55f);
         break;
     case Screen::Info: {
@@ -465,6 +496,19 @@ void drawBottom(const State& st) {
         button(B_BACK, "Weiter (A)", C_OK, C_WHITE, 0.55f);
         break;
     }
+    case Screen::SaveMoves:
+        text("Umgeräumt", 160, 4, 0.6f, C_WHITE, CENTER);
+        text("Du hast Pokémon umgeräumt.", 160, 50, 0.5f, C_WHITE, CENTER);
+        if (st.current) {
+            text("In " + st.current->label() + " übernehmen?", 160, 74, 0.5f, C_WHITE, CENTER, 300);
+            text("Der Spielstand wird dafür neu geschrieben (mit Sicherung).", 160, 100, 0.4f, C_LIGHT, CENTER, 300);
+        } else {
+            text("Im Speicher sichern?", 160, 74, 0.5f, C_WHITE, CENTER);
+        }
+        text("Beim Verwerfen bleibt alles wie vor dem Umräumen.", 160, 140, 0.4f, C_LIGHT, CENTER, 300);
+        button(B_YES, "Übernehmen (A)", C_OK, C_WHITE, 0.5f);
+        button(B_NO, "Verwerfen (B)", C_BG2, C_WHITE, 0.5f);
+        break;
     case Screen::Travel: {
         text("Wohin möchtest du reisen?", 160, 4, 0.55f, C_WHITE, CENTER);
         for (int r = 0; r < NREG; r++) {
@@ -605,7 +649,8 @@ bool travel(State& st, std::string& err) {
 
     step("Übertrage Pokémon, Items und Geld");
     Bank bank = st.bank;
-    if (from && (from->game->gen <= 2 ? !bank.departGB(fromGB, ctxFor(*from->game), err) : !bank.depart(*fromSav, err))) return false;
+    if (from && st.synced) bank.leave(); // Stand wurde beim Start übernommen (plus Umräumen in der App)
+    else if (from && (from->game->gen <= 2 ? !bank.departGB(fromGB, ctxFor(*from->game), err) : !bank.depart(*fromSav, err))) return false;
     int hidden = 0;
     if (to.game->gen <= 2 ? !bank.arriveGB(toGB, ctxFor(*to.game), hidden, err) : !bank.arrive(*toSav, hidden, err)) return false;
     bank.currentLow = to.game->lowId;
@@ -630,8 +675,10 @@ bool travel(State& st, std::string& err) {
     if (!bank.save(BANK, err)) { err = "Spielstand geschrieben, aber Speicher nicht: " + err; return false; }
     writeLast(to.game->lowId);
     st.bank = bank;
-    st.shown = bank;
     st.current = &to;
+    st.synced = true; // der Speicher entspricht jetzt dem Zielspiel
+    st.dirty = false;
+    st.held = -1;
 
     st.message = std::to_string(bank.count()) + " Pokémon im Speicher, " + std::to_string(hidden) + " davon in " + to.label() +
                  " nicht sichtbar.";
@@ -669,9 +716,37 @@ void doLaunch(State& st) {
     }
 }
 
+void requestQuit(State& st) {
+    if (st.dirty) st.screen = Screen::SaveMoves;
+    else st.quit = true;
+}
+
+// A im Team/PC: aufnehmen bzw. ablegen (tauschen).
+void pickOrDrop(State& st) {
+    if (st.current && !st.synced) {
+        st.message = "Umräumen nicht möglich\nDer Spielstand von " + st.current->label() + "\nkonnte beim Start nicht übernommen werden.";
+        st.screen = Screen::Error;
+        return;
+    }
+    int pos = st.view == View::Team ? st.teamCursor : Bank::PARTY + st.box * Bank::SLOTS + st.cursor;
+    if (st.held < 0) {
+        if (entryAt(st, pos).used) st.held = pos;
+        return;
+    }
+    if (st.held != pos) {
+        std::swap(entryAt(st, st.held), entryAt(st, pos));
+        st.dirty = true;
+    }
+    st.held = -1;
+}
+
 void input(State& st, u32 down, const touchPosition& t) {
     bool touch = down & KEY_TOUCH;
-    if (down & KEY_START) { st.quit = true; return; }
+    if (down & KEY_START) {
+        if (st.screen == Screen::Menu) requestQuit(st);
+        else if (st.screen != Screen::Busy && st.screen != Screen::SaveMoves) st.quit = true;
+        return;
+    }
 
     // Navigation im oberen Bildschirm (in allen Menüs außer während der Reise)
     if (st.screen == Screen::Menu || st.screen == Screen::Travel) {
@@ -683,8 +758,13 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (down & KEY_DDOWN) st.cursor = (st.cursor + 6) % Bank::SLOTS;
             if (down & KEY_DUP) st.cursor = (st.cursor + Bank::SLOTS - 6) % Bank::SLOTS;
         }
+        if (st.view == View::Team) {
+            if (down & (KEY_DRIGHT | KEY_DLEFT)) st.teamCursor ^= 1;
+            if (down & KEY_DDOWN) st.teamCursor = (st.teamCursor + 2) % Bank::PARTY;
+            if (down & KEY_DUP) st.teamCursor = (st.teamCursor + Bank::PARTY - 2) % Bank::PARTY;
+        }
         if (st.view == View::Bag) {
-            int maxScroll = std::max(0, int(st.shown.items.size()) - BAG_ROWS);
+            int maxScroll = std::max(0, int(st.bank.items.size()) - BAG_ROWS);
             if (down & KEY_DDOWN) st.bagScroll = std::min(maxScroll, st.bagScroll + 1);
             if (down & KEY_DUP) st.bagScroll = std::max(0, st.bagScroll - 1);
         }
@@ -695,12 +775,28 @@ void input(State& st, u32 down, const touchPosition& t) {
     case Screen::Info:
         if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.screen = Screen::Menu;
         break;
+    case Screen::SaveMoves:
+        if ((touch && B_YES.hit(t)) || (down & KEY_A)) {
+            if (st.current) {
+                st.target = st.current;
+                doTravel(st);
+            } else {
+                std::string err;
+                if (st.bank.save(BANK, err)) st.quit = true;
+                else { st.message = "Speichern fehlgeschlagen\n" + err; st.screen = Screen::Error; }
+            }
+        } else if ((touch && B_NO.hit(t)) || (down & KEY_B)) {
+            st.quit = true;
+        }
+        break;
     case Screen::Menu:
-        if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) startTravel(st);
+        if (st.view != View::Bag && (down & KEY_A)) pickOrDrop(st);
+        else if (down & KEY_B) st.held = -1;
+        else if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) { st.held = -1; startTravel(st); }
         else if (touch && B_TEAM.hit(t)) st.view = View::Team;
         else if (touch && B_PC.hit(t)) st.view = View::PC;
         else if (touch && B_BAG.hit(t)) st.view = View::Bag;
-        else if (touch && B_EXIT.hit(t)) st.quit = true;
+        else if (touch && B_EXIT.hit(t)) requestQuit(st);
         break;
     case Screen::Travel:
         if ((touch && B_BACK.hit(t)) || (down & KEY_B)) { st.screen = Screen::Menu; break; }

@@ -84,6 +84,7 @@ void syncAll(Bank& bank, const std::vector<SyncInput>& saves, const SpeciesData&
                 bool done = in.gen <= 2 ? bank.departGB(o.gb, ctxFor(in, bank, species, names), err, true)
                                         : bank.depart(*o.sav, err, true);
                 if (!done) rep.lines.push_back(in.label + ": " + err);
+                rep.currentSynced = done;
                 continue;
             }
             if (in.known && !bank.slot(in.lowId, in.media))

@@ -59,7 +59,9 @@ struct BankItem {
 
 class Bank {
 public:
-    static constexpr int PARTY = 6, BOXES = 32, SLOTS = 30;
+    // 100 Boxen: 1–31/32 entsprechen den Boxen der Spiele, der Rest ist nur im Speicher (in der App sichtbar).
+    static constexpr int PARTY = 6, BOXES = 100, SLOTS = 30;
+    static constexpr int OLD_BOXES = 32; // Dateiversion 1–4
 
     Trainer6 trainer;
     std::string current; // Spiel, in dem man sich gerade befindet (kindName), leer = keins
@@ -121,6 +123,10 @@ public:
     // Bekannter Spielstand; record legt ihn an (Trainer wie im Spielstand), ohne Items zu übernehmen.
     BankSlot* slot(uint32_t lowId, uint8_t media);
     void record(uint32_t lowId, uint8_t media, int gen, const Trainer6& t);
+
+    // Nach dem Abgleich beim Start: abreisen, ohne den Spielstand erneut zu lesen (der Speicher
+    // enthält ihn bereits, dazu Umräumen in der App).
+    void leave();
 
     int count() const;
 

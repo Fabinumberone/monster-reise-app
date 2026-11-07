@@ -33,6 +33,7 @@ struct SyncReport {
     std::vector<std::string> lines; // kurze Meldungen je Spielstand (nur wenn etwas passiert ist)
     int added = 0, updated = 0, noRoom = 0;
     bool createdTrainer = false;
+    bool currentSynced = false; // aktueller Spielstand übernommen (dann reicht beim Reisen Bank::leave)
 };
 
 void syncAll(Bank& bank, const std::vector<SyncInput>& saves, const SpeciesData& species, const Names& names,
