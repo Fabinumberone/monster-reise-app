@@ -110,7 +110,11 @@ uint32_t Save6::boxOffset(int box, int slot) const {
     return layout_.box + uint32_t(box * BOX_SLOTS + slot) * PK6_BOX_SIZE;
 }
 
-bool Save6::boxSlotEmpty(int box, int slot) const { return isEmptySlot(&data_[boxOffset(box, slot)], PK6_BOX_SIZE); }
+// Leere Plätze sind im Spiel verschlüsselte Leerdatensätze (Art 0), nicht nur Nullen.
+bool Save6::boxSlotEmpty(int box, int slot) const {
+    const uint8_t* p = &data_[boxOffset(box, slot)];
+    return isEmptySlot(p, PK6_BOX_SIZE) || PK6::decrypt(p, PK6_BOX_SIZE).species() == 0;
+}
 
 PK6 Save6::boxSlot(int box, int slot) const { return PK6::decrypt(&data_[boxOffset(box, slot)], PK6_BOX_SIZE); }
 

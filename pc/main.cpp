@@ -43,17 +43,22 @@ static int cmdInfo(Save6& sav) {
     for (int i = 0; i < n && i < 6; i++) {
         char lbl[16];
         std::snprintf(lbl, sizeof lbl, "#%d", i + 1);
-        printPk(lbl, sav.partySlot(i));
+        PK6 pk = sav.partySlot(i);
+        printPk(lbl, pk);
+        std::printf("           Level %u\n", pk.partyLevel());
     }
 
     std::printf("\nBoxen:\n");
+    int boxed = 0;
     for (int b = 0; b < sav.boxCount(); b++)
         for (int s = 0; s < Save6::BOX_SLOTS; s++) {
             if (sav.boxSlotEmpty(b, s)) continue;
+            boxed++;
             char lbl[16];
             std::snprintf(lbl, sizeof lbl, "B%02d/%02d", b + 1, s + 1);
             printPk(lbl, sav.boxSlot(b, s));
         }
+    std::printf("  %d Pokémon in %d Boxen\n", boxed, sav.boxCount());
     return bad ? 2 : 0;
 }
 

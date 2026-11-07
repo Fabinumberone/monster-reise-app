@@ -19,8 +19,10 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 
 ## Stand (2026-11-07)
 - `core/` und `pc/` angelegt: Gen-6-Spielstand (Blocktabelle + CRC16 prüfen/neu berechnen), PK6 ent-/verschlüsseln, Team/Boxen/Trainer auslesen, Suche nach gültigen PK6 im Spielstand (`scan`) zur Bestätigung der Offsets.
-- **Offsets und Blocktabelle stammen aus dem Gedächtnis (Stand PKHeX) und sind noch nicht an echten Spielständen geprüft.** `pw3d-reise info` meldet, ob alle Block-Prüfsummen stimmen; `scan` findet die tatsächlichen Box-/Team-Offsets.
-- Noch keine Spielstände vorhanden: Azahar wurde noch nie gestartet (kein `%APPDATA%\Azahar`). CIAs in Azahar installieren, je Spiel bis zum ersten Speichern spielen.
+- **Gen 6 an echten Spielständen bestätigt** (Sicherungen in `saves/orig/`, ignoriert): ORAS 58 Blöcke, XY 55 Blöcke, alle CRC16-CCITT korrekt. Trainer (0x14000), Team (0x14200) und PK6-Entschlüsselung inkl. Vertauschungstabelle stimmen (OR: Flemmli, X: Froxy, je Level 5). Boxen noch leer; leere Plätze sind verschlüsselte Leerdatensätze (Art 0, Spitzname „Ei“) und entschlüsseln an den angenommenen Box-Offsets sauber.
+- **Ultramond (USUM, 0x6CC00) erste Untersuchung**: Blocktabelle gleich aufgebaut (BEEF bei Ende−0x1F0, 39 Blöcke, 0x200-Ausrichtung), Prüfsumme CRC16 gespiegelt+invertiert (`crc16Invert`). Team bei 0x1600 (Block 04, gleicher Aufbau wie Gen 6, PK7 mit gleicher Verschlüsselung, Flamiau Nr. 725), Trainer-TID/SID bei 0x1400 (Block 03).
+- **Signatur in USUM**: Block 0x24 bei 0x6C000 (0x200 Byte) enthält ab +0x100 eine 0x80-Byte-Signatur (MemeCrypto). Die CRC dieses Blocks wird mit genullter Signatur berechnet. Offen: ob das Spiel die Signatur beim Laden prüft (Test: harmlos ändern, nur CRCs neu, in Azahar laden). Falls ja, siehe PKHeX `MemeCrypto`.
+- Installiert in Azahar: Omega Rubin, Alpha Saphir, X, Sonne (`00164800` bestätigt), Ultramond. Spielstände bisher: OR, X, UM.
 - Host-Compiler: WinLibs (MinGW g++ 16.2) per winget installiert, liegt unter `%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_*\mingw64\bin` (in neuen Shells im PATH). Bauen: in `pc/` `mingw32-make` → `build/pw3d-reise.exe`.
 - `pw3d-reise selbsttest` läuft durch: CRC-Testvektoren und PK6-Rundlauf (verschlüsseln/entschlüsseln) stimmen. Ob die Blocktabelle (Vertauschungstabelle der Blöcke A–D eingeschlossen) zu echten Daten passt, zeigt erst ein echter Spielstand.
 
