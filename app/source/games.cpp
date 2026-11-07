@@ -1,6 +1,14 @@
 #include "games.hpp"
 
+#include <cctype>
+
+#include <dirent.h>
+
 #include <cstdio>
+#include <deque>
+
+#include "gba.hpp"
+#include "gbaconvert.hpp"
 
 using pw3d::GameKind;
 
@@ -25,7 +33,62 @@ const std::vector<Game>& allGames() {
     return games;
 }
 
+const std::vector<Game>& fileGames() {
+    static std::vector<Game> games;
+    static std::deque<std::string> strings; // hält die Texte, auf die Game zeigt
+    static bool scanned = false;
+    if (scanned) return games;
+    scanned = true;
+    const char* dirs[] = {"sdmc:/mGBA"};
+    for (const char* dir : dirs) {
+        DIR* d = opendir(dir);
+        if (!d) continue;
+        while (dirent* ent = readdir(d)) {
+            std::string fn = ent->d_name;
+            if (fn.size() < 5) continue;
+            std::string ext = fn.substr(fn.size() - 4);
+            for (auto& c : ext) c = char(std::tolower(c));
+            if (ext != ".sav") continue;
+            std::string path = std::string(dir) + "/" + fn;
+            FILE* f = std::fopen(path.c_str(), "rb");
+            if (!f) continue;
+            std::vector<u8> data(0x20100);
+            size_t n = std::fread(data.data(), 1, data.size(), f);
+            std::fclose(f);
+            if (n < 0x20000 || n > 0x20100) continue;
+            data.resize(n);
+            pw3d::SaveGBA s;
+            std::string err;
+            if (!s.load(data, err)) continue;
+            u8 ver = pw3d::gen3OriginVersion(s);
+            const char* name = ver == 1 ? "Saphir" : ver == 2 ? "Rubin" : ver == 3 ? "Smaragd" : ver == 4 ? "Feuerrot" : "Blattgrün";
+            if (s.game() == pw3d::GBAGame::E) name = "Smaragd";
+            for (auto& g : games)
+                if (std::string(g.name) == name) { strings.push_back(fn.substr(0, fn.size() - 4)); name = strings.back().c_str(); break; }
+            u32 h = 2166136261u;
+            for (unsigned char c : fn) h = (h ^ c) * 16777619u;
+            strings.push_back(name);
+            const char* nm = strings.back().c_str();
+            strings.push_back(path);
+            const char* p = strings.back().c_str();
+            const char* kind = s.game() == pw3d::GBAGame::RS ? "GBA-RS" : s.game() == pw3d::GBAGame::E ? "GBA-E" : "GBA-FRLG";
+            Game g{nm, s.game() == pw3d::GBAGame::FRLG ? "Kanto" : "Hoenn", h | 0x80000000u, 3, GameKind::XY, p, 5, ver};
+            g.kindName = kind;
+            games.push_back(g);
+        }
+        closedir(d);
+    }
+    return games;
+}
+
+std::string saveName(const Game& g) {
+    std::string s = g.saveFile;
+    size_t p = s.find_last_of('/');
+    return p == std::string::npos ? s : s.substr(p + 1);
+}
+
 const char* bankKind(const Game& g) {
+    if (g.gen == 3) return g.kindName;
     if (g.gen == 1) return "RBY";
     if (g.gen == 2) return "GSC";
     return pw3d::kindName(g.kind);
@@ -33,6 +96,8 @@ const char* bankKind(const Game& g) {
 
 const Game* gameByLowId(u32 lowId) {
     for (auto& g : allGames())
+        if (g.lowId == lowId) return &g;
+    for (auto& g : fileGames())
         if (g.lowId == lowId) return &g;
     return nullptr;
 }
@@ -83,13 +148,15 @@ std::vector<SaveSlot> findSaves() {
         if (archiveHasFile(g, MEDIATYPE_SD)) out.push_back({&g, MEDIATYPE_SD});
         if (g.gen >= 6 && archiveHasFile(g, MEDIATYPE_GAME_CARD)) out.push_back({&g, MEDIATYPE_GAME_CARD});
     }
+    for (auto& g : fileGames()) out.push_back({&g, MEDIATYPE_SD});
     return out;
 }
 
 bool readSave(const SaveSlot& s, std::vector<u8>& out, std::string& err) {
     const Game& g = *s.game;
-    if (!s.cart() && emuExists(g)) {
-        FILE* f = std::fopen(emuPath(g).c_str(), "rb");
+    if (g.gen == 3 || (!s.cart() && emuExists(g))) {
+        FILE* f = std::fopen(g.gen == 3 ? g.saveFile : emuPath(g).c_str(), "rb");
+        if (!f) { err = s.label() + ": Spielstand nicht lesbar"; return false; }
         std::fseek(f, 0, SEEK_END);
         long n = std::ftell(f);
         std::fseek(f, 0, SEEK_SET);
@@ -117,8 +184,8 @@ bool readSave(const SaveSlot& s, std::vector<u8>& out, std::string& err) {
 
 bool writeSave(const SaveSlot& s, const std::vector<u8>& data, std::string& err) {
     const Game& g = *s.game;
-    if (!s.cart() && emuExists(g)) {
-        FILE* f = std::fopen(emuPath(g).c_str(), "r+b"); // vorhandene Datei überschreiben
+    if (g.gen == 3 || (!s.cart() && emuExists(g))) {
+        FILE* f = std::fopen(g.gen == 3 ? g.saveFile : emuPath(g).c_str(), "r+b"); // vorhandene Datei überschreiben
         if (!f) { err = "Kann Spielstand nicht öffnen"; return false; }
         bool ok = std::fwrite(data.data(), 1, data.size(), f) == data.size();
         ok = (std::fclose(f) == 0) && ok;
@@ -140,6 +207,7 @@ bool writeSave(const SaveSlot& s, const std::vector<u8>& data, std::string& err)
 }
 
 bool launchGame(const SaveSlot& s) {
+    if (s.game->gen == 3) return false; // mGBA startet man selbst
     u64 tid = (u64(HIGH_ID) << 32) | s.game->lowId;
     // Läuft das Home-Menü (echte Konsole), springt libctru beim Beenden über den Chainloader.
     // Ohne Home-Menü (Azahar startet die App direkt) nähme libctru einen Luma3DS-Umweg, der im

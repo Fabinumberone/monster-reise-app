@@ -12,6 +12,7 @@
 #include "../core/convert.hpp"
 #include "../core/gb.hpp"
 #include "../core/gba.hpp"
+#include "../core/gbaconvert.hpp"
 #include "../core/gbconvert.hpp"
 #include "../core/gen3tables.hpp"
 #include "../core/species.hpp"
@@ -365,6 +366,41 @@ static std::string splitLang(const std::string& arg, uint8_t& lang) {
     return arg;
 }
 
+static bool isGBAFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    auto n = f ? f.tellg() : std::streampos(0);
+    return n >= 0x20000 && n <= 0x20100;
+}
+
+static bool loadGBA(const std::string& path, SaveGBA& s) {
+    std::vector<uint8_t> data;
+    std::string err;
+    if (!readFile(path, data) || !s.load(std::move(data), err)) { std::fprintf(stderr, "%s: %s\n", path.c_str(), err.c_str()); return false; }
+    if (!s.checksumsValid()) { std::fprintf(stderr, "%s: Prüfsummen stimmen schon vorher nicht\n", path.c_str()); return false; }
+    return true;
+}
+
+static uint8_t gbaVersionOf(const SaveGBA& s) { return gen3OriginVersion(s); }
+
+static GBAContext makeGbaCtx(const SaveGBA& s, const Trainer6& trainer) {
+    GBAContext c;
+    c.species = &g_species;
+    c.names = &g_names;
+    c.trainer = trainer;
+    c.version = gbaVersionOf(s);
+    return c;
+}
+
+static bool writeGBA(const std::string& path, SaveGBA& s) {
+    s.finalize();
+    SaveGBA check;
+    std::string err;
+    if (!check.load(s.raw(), err) || !check.checksumsValid()) { std::fprintf(stderr, "Gegenprobe fehlgeschlagen, nichts geschrieben\n"); return false; }
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(s.raw().data()), std::streamsize(s.raw().size()));
+    return bool(f);
+}
+
 static bool isGBFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     auto n = f ? f.tellg() : std::streampos(0);
@@ -413,6 +449,11 @@ static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg
     std::string fromTitle, toTitle;
     if (fromPath == "-") { // kein aktuelles Spiel (neuer Speicher)
         fromTitle = "keinem Spiel";
+    } else if (isGBAFile(fromPath)) {
+        SaveGBA from;
+        if (!loadGBA(fromPath, from)) return 1;
+        if (!bank.departGBA(from, makeGbaCtx(from, bank.trainer), err)) { std::fprintf(stderr, "Abreise: %s\n", err.c_str()); return 1; }
+        fromTitle = gbaGameName(from.game());
     } else if (isGBFile(fromPath)) {
         SaveGB from;
         if (!loadGB(fromPath, from)) return 1;
@@ -425,7 +466,13 @@ static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg
         fromTitle = from->gameTitle();
     }
     int hidden = 0;
-    if (isGBFile(toPath)) {
+    if (isGBAFile(toPath)) {
+        SaveGBA to;
+        if (!loadGBA(toPath, to)) return 1;
+        if (!bank.arriveGBA(to, makeGbaCtx(to, bank.trainer), hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
+        if (!writeGBA(toPath, to)) return 1;
+        toTitle = gbaGameName(to.game());
+    } else if (isGBFile(toPath)) {
         SaveGB to;
         if (!loadGB(toPath, to)) return 1;
         if (!bank.arriveGB(to, makeCtx(to, toLang, bank.trainer), hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
@@ -469,7 +516,12 @@ static int cmdAbgleich(int argc, char** argv) {
         for (auto& c : q) if (c == '\\') c = '/';
         size_t t = q.find("/00040000/");
         if (t != std::string::npos) s.lowId = uint32_t(std::strtoul(q.substr(t + 10, 8).c_str(), nullptr, 16));
-        if (isGBFile(p)) {
+        if (isGBAFile(p)) {
+            SaveGBA g;
+            if (!loadGBA(p, g)) return 1;
+            s.gen = 3;
+            s.gbVersion = gbaVersionOf(g);
+        } else if (isGBFile(p)) {
             SaveGB g;
             if (!loadGB(p, g)) return 1;
             s.gen = g.generation();

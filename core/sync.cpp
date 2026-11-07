@@ -3,6 +3,8 @@
 #include <memory>
 
 #include "gb.hpp"
+#include "gba.hpp"
+#include "gbaconvert.hpp"
 #include "gbconvert.hpp"
 #include "savefile.hpp"
 
@@ -14,6 +16,7 @@ struct Opened {
     const SyncInput* in = nullptr;
     std::unique_ptr<SaveFile> sav; // Gen 6/7
     SaveGB gb;                     // Gen 1/2
+    SaveGBA gba;                   // Gen 3
     int count = 0;                 // Anzahl Pokémon (für die Wahl des Trainers)
 };
 
@@ -28,6 +31,21 @@ GBContext ctxFor(const SyncInput& in, const Bank& bank, const SpeciesData& sp, c
     return c;
 }
 
+GBAContext gbaCtxFor(const SyncInput& in, const Bank& bank, const SpeciesData& sp, const Names& names) {
+    GBAContext c;
+    c.species = &sp;
+    c.names = &names;
+    c.trainer = bank.trainer;
+    c.version = in.gbVersion;
+    return c;
+}
+
+Trainer6 trainerOf(const Opened& o) {
+    if (o.in->gen <= 2) return Trainer6{o.gb.tid(), 0, 0, o.gb.trainerName()};
+    if (o.in->gen == 3) return Trainer6{o.gba.tid(), o.gba.sid(), o.gba.trainerGender(), o.gba.trainerName()};
+    return o.sav->trainer();
+}
+
 } // namespace
 
 void syncAll(Bank& bank, const std::vector<SyncInput>& saves, const SpeciesData& species, const Names& names,
@@ -38,7 +56,13 @@ void syncAll(Bank& bank, const std::vector<SyncInput>& saves, const SpeciesData&
         Opened o;
         o.in = &in;
         std::string err;
-        if (in.gen <= 2) {
+        if (in.gen == 3) {
+            if (!species.loaded()) { rep.lines.push_back(in.label + ": arten.bin fehlt, übersprungen"); continue; }
+            if (!o.gba.load(in.data, err) || !o.gba.checksumsValid()) { rep.lines.push_back(in.label + ": Spielstand ungültig, übersprungen"); continue; }
+            for (const PK3& m : o.gba.party()) o.count += m.present();
+            for (int b = 0; b < SaveGBA::BOXES; b++)
+                for (int s = 0; s < SaveGBA::SLOTS; s++) o.count += o.gba.boxSlot(b, s).present();
+        } else if (in.gen <= 2) {
             if (!species.loaded()) { rep.lines.push_back(in.label + ": arten.bin fehlt, übersprungen"); continue; }
             if (!o.gb.load(in.data, err) || !o.gb.checksumValid()) { rep.lines.push_back(in.label + ": Spielstand ungültig, übersprungen"); continue; }
             o.count = int(o.gb.party().size());
@@ -64,8 +88,7 @@ void syncAll(Bank& bank, const std::vector<SyncInput>& saves, const SpeciesData&
         }
         if (!best) return;
         origin = best->in;
-        if (best->in->gen >= 6) bank.trainer = best->sav->trainer();
-        else bank.trainer = Trainer6{best->gb.tid(), 0, 0, best->gb.trainerName()};
+        bank.trainer = trainerOf(*best);
         bank.current.clear();
         rep.createdTrainer = true;
         rep.lines.push_back("Neuer Speicher, Trainer aus " + best->in->label);
@@ -78,21 +101,19 @@ void syncAll(Bank& bank, const std::vector<SyncInput>& saves, const SpeciesData&
             if (in.current != (pass == 0)) continue;
             std::string err;
             if (in.current) {
-                if (!bank.slot(in.lowId, in.media))
-                    bank.record(in.lowId, in.media, in.gen,
-                                in.gen <= 2 ? Trainer6{o.gb.tid(), 0, 0, o.gb.trainerName()} : o.sav->trainer());
-                bool done = in.gen <= 2 ? bank.departGB(o.gb, ctxFor(in, bank, species, names), err, true)
-                                        : bank.depart(*o.sav, err, true);
+                if (!bank.slot(in.lowId, in.media)) bank.record(in.lowId, in.media, in.gen, trainerOf(o));
+                bool done = in.gen == 3   ? bank.departGBA(o.gba, gbaCtxFor(in, bank, species, names), err, true)
+                            : in.gen <= 2 ? bank.departGB(o.gb, ctxFor(in, bank, species, names), err, true)
+                                          : bank.depart(*o.sav, err, true);
                 if (!done) rep.lines.push_back(in.label + ": " + err);
                 rep.currentSynced = done;
                 continue;
             }
-            if (in.known && !bank.slot(in.lowId, in.media))
-                bank.record(in.lowId, in.media, in.gen,
-                            in.gen <= 2 ? Trainer6{o.gb.tid(), 0, 0, o.gb.trainerName()} : o.sav->trainer());
+            if (in.known && !bank.slot(in.lowId, in.media)) bank.record(in.lowId, in.media, in.gen, trainerOf(o));
             bool force = o.in == origin;
-            IntegrateResult r = in.gen <= 2 ? bank.integrateGB(o.gb, ctxFor(in, bank, species, names), in.lowId, in.media, force)
-                                            : bank.integrate(*o.sav, in.lowId, in.media, force);
+            IntegrateResult r = in.gen == 3   ? bank.integrateGBA(o.gba, gbaCtxFor(in, bank, species, names), in.lowId, in.media, force)
+                                : in.gen <= 2 ? bank.integrateGB(o.gb, ctxFor(in, bank, species, names), in.lowId, in.media, force)
+                                              : bank.integrate(*o.sav, in.lowId, in.media, force);
             rep.added += r.added;
             rep.updated += r.updated;
             rep.noRoom += r.noRoom;

@@ -49,8 +49,9 @@ struct PK3 {
 PK3 pk3Decrypt(const uint8_t* raw, bool party);
 void pk3Encrypt(const PK3& pk, uint8_t* raw);
 
-// Zeichenkette im Gen-3-Zeichensatz (bis 0xFF).
+// Zeichenkette im Gen-3-Zeichensatz (bis 0xFF) und zurück (unbekannte Zeichen -> „?“, Rest 0xFF).
 std::string gen3String(const uint8_t* s, size_t max);
+void gen3Encode(const std::string& utf8, uint8_t* out, size_t max);
 
 struct GBAItem {
     uint16_t id = 0;  // Gen-3-Nummer
@@ -79,6 +80,17 @@ public:
     // Taschen: Items, Schlüssel-Items, Bälle, TM/VM, Beeren, Item-PC
     enum class Pouch { Items, Key, Balls, TMs, Berries, PC };
     std::vector<GBAItem> pouch(Pouch p) const;
+    int pouchCapacity(Pouch p) const { return pouchInfo(p).count; }
+    uint16_t maxStack(Pouch p) const { return (p == Pouch::PC || game_ == GBAGame::FRLG) ? 999 : 99; }
+
+    // Schreiben (finalize() danach: Daten zurück in die Sektoren, Prüfsummen)
+    void setParty(const std::vector<PK3>& mons);
+    void setBoxSlot(int box, int slot, const PK3* pk); // nullptr = leer
+    void setPouch(Pouch p, const std::vector<GBAItem>& items);
+    void setMoney(uint32_t v);
+    void setTrainer(const std::string& name, uint16_t tid, uint16_t sid, uint8_t gender);
+    void registerDex(uint16_t species); // gesehen + gefangen
+    void finalize();
 
 private:
     struct PouchInfo { uint32_t ofs; int count; };
@@ -86,6 +98,8 @@ private:
     uint32_t inventoryOfs() const { return game_ == GBAGame::FRLG ? 0x298 : 0x498; }
     uint32_t partyCountOfs() const { return game_ == GBAGame::FRLG ? 0x34 : 0x234; }
     uint32_t moneyOfs() const { return game_ == GBAGame::FRLG ? 0x290 : 0x490; }
+    uint32_t seen2Ofs() const { return game_ == GBAGame::RS ? 0x938 : game_ == GBAGame::E ? 0x988 : 0x5F8; }
+    uint32_t seen3Ofs() const { return game_ == GBAGame::RS ? 0x3A8C : game_ == GBAGame::E ? 0x3B24 : 0x3A18; }
 
     std::vector<uint8_t> data_;
     int active_ = 0;

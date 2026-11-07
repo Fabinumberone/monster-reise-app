@@ -58,6 +58,22 @@ std::string gen3String(const uint8_t* s, size_t max) {
     return out;
 }
 
+void gen3Encode(const std::string& s, uint8_t* out, size_t max) {
+    std::memset(out, 0xFF, max);
+    size_t n = 0, i = 0;
+    while (i < s.size() && n < max) {
+        size_t len = 1;
+        unsigned char c = s[i];
+        if (c >= 0xF0) len = 4; else if (c >= 0xE0) len = 3; else if (c >= 0xC0) len = 2;
+        std::string ch = s.substr(i, len);
+        i += len;
+        uint8_t code = 0xAC; // ?
+        if (ch == "“") code = 0xB2; // schließendes deutsches Anführungszeichen
+        else for (int k = 0; k < 0xFF; k++) if (ch == kGen3Chars[k]) { code = uint8_t(k); break; }
+        out[n++] = code;
+    }
+}
+
 // ---------- PK3 ----------
 
 uint32_t PK3::pid() const { return rd32(&d[0]); }
@@ -161,6 +177,67 @@ std::vector<PK3> SaveGBA::party() const {
 
 PK3 SaveGBA::boxSlot(int box, int slot) const {
     return pk3Decrypt(&storage_[4 + (size_t(box) * SLOTS + size_t(slot)) * 80], false);
+}
+
+void SaveGBA::setParty(const std::vector<PK3>& mons) {
+    uint32_t o = partyCountOfs();
+    size_t n = std::min<size_t>(mons.size(), 6);
+    large_[o] = uint8_t(n);
+    std::memset(&large_[o + 4], 0, 6 * 100);
+    for (size_t i = 0; i < n; i++) {
+        PK3 pk = mons[i];
+        pk.party = true;
+        pk3Encrypt(pk, &large_[o + 4 + i * 100]);
+    }
+}
+
+void SaveGBA::setBoxSlot(int box, int slot, const PK3* pk) {
+    uint8_t* dst = &storage_[4 + (size_t(box) * SLOTS + size_t(slot)) * 80];
+    if (!pk) { std::memset(dst, 0, 80); return; }
+    PK3 p = *pk;
+    p.party = false;
+    pk3Encrypt(p, dst);
+}
+
+void SaveGBA::setPouch(Pouch p, const std::vector<GBAItem>& items) {
+    PouchInfo pi = pouchInfo(p);
+    uint16_t key = p == Pouch::PC ? 0 : uint16_t(securityKey());
+    for (int i = 0; i < pi.count; i++) {
+        uint8_t* q = &large_[inventoryOfs() + pi.ofs + size_t(i) * 4];
+        GBAItem it = size_t(i) < items.size() ? items[size_t(i)] : GBAItem{};
+        wr16(q, it.id);
+        wr16(q + 2, uint16_t((it.id ? it.count : 0) ^ key));
+    }
+}
+
+void SaveGBA::setMoney(uint32_t v) { wr32(&large_[moneyOfs()], std::min<uint32_t>(v, 999999) ^ securityKey()); }
+
+void SaveGBA::setTrainer(const std::string& name, uint16_t tid, uint16_t sid, uint8_t gender) {
+    gen3Encode(name, &small_[0], 7);
+    small_[7] = 0xFF;
+    small_[8] = gender & 1;
+    wr16(&small_[0x0A], tid);
+    wr16(&small_[0x0C], sid);
+}
+
+void SaveGBA::registerDex(uint16_t species) {
+    if (species == 0 || species > 386) return;
+    int bit = species - 1;
+    auto set = [&](std::vector<uint8_t>& buf, uint32_t ofs) { buf[ofs + size_t(bit >> 3)] |= uint8_t(1 << (bit & 7)); };
+    set(small_, 0x18 + 0x10); // gefangen
+    set(small_, 0x18 + 0x44); // gesehen
+    set(large_, seen2Ofs());  // Kopien von „gesehen“
+    set(large_, seen3Ofs());
+}
+
+void SaveGBA::finalize() {
+    for (int i = 0; i < 14; i++) {
+        uint8_t* s = &data_[size_t(active_) * MAIN + size_t(i) * SECTOR];
+        uint16_t id = rd16(s + 0xFF4);
+        const uint8_t* src = id == 0 ? small_.data() : id <= 4 ? &large_[(id - 1) * USED] : &storage_[(id - 5) * USED];
+        std::memcpy(s, src, USED);
+        wr16(s + 0xFF6, checksum32(s, USED));
+    }
 }
 
 SaveGBA::PouchInfo SaveGBA::pouchInfo(Pouch p) const {

@@ -20,6 +20,8 @@
 #include "bytes.hpp"
 #include "games.hpp"
 #include "gb.hpp"
+#include "gba.hpp"
+#include "gbaconvert.hpp"
 #include "gbconvert.hpp"
 #include "icons.hpp"
 #include "species.hpp"
@@ -170,6 +172,15 @@ GBContext gbCtx(const Game& g, const Trainer6& t) {
     return c;
 }
 
+GBAContext gbaCtx(const Game& g, const Trainer6& t) {
+    GBAContext c;
+    c.species = &g_species;
+    c.names = &g_names;
+    c.trainer = t;
+    c.version = g.gbVersion;
+    return c;
+}
+
 bool readFileAll(const char* path, std::vector<u8>& out) {
     FILE* f = std::fopen(path, "rb");
     if (!f) return false;
@@ -267,6 +278,7 @@ void loadState(State& st) {
 // Ist das Pokémon im aktuellen Spiel sichtbar?
 bool visibleHere(const State& st, const PK6& pk) {
     if (!st.current) return true;
+    if (st.current->game->gen == 3) return fitsGen3(pk);
     if (st.current->game->gen <= 2) return fitsGB(pk, st.current->game->gen);
     return fitsIn(pk, st.current->game->kind);
 }
@@ -274,7 +286,7 @@ bool visibleHere(const State& st, const PK6& pk) {
 // Boxen des Spiels (Gen 1/2: Plätze zu je 20, linear über die Speicherboxen verteilt).
 int gameBoxes(const Game& g) {
     if (g.gen == 1) return 12;
-    if (g.gen == 2) return 14;
+    if (g.gen == 2 || g.gen == 3) return 14;
     return (g.kind == GameKind::XY || g.kind == GameKind::ORAS) ? 31 : 32;
 }
 
@@ -331,6 +343,11 @@ const char* gameOfVersion(u8 v) {
 // Wo liegt das Item im aktuellen Spiel? nullptr = dort nicht sichtbar.
 const char* itemPlaceHere(const State& st, uint16_t item) {
     if (!st.current) return "";
+    if (st.current->game->gen == 3) {
+        uint16_t g3 = modernItemToGen3(item);
+        if (!g3 || pouchOf(GameKind::USUM, item) == Pouch::None) return nullptr;
+        return g3 <= 12 ? "Ball-Tasche" : (g3 >= 133 && g3 <= 175) ? "Beeren-Tasche" : "Items";
+    }
     if (st.current->game->gen == 1) return modernItemToGen1(item) ? "Beutel" : nullptr;
     if (st.current->game->gen == 2) {
         if (!modernItemToGen2(item) || pouchOf(GameKind::USUM, item) == Pouch::None) return nullptr;
@@ -666,7 +683,7 @@ void drawBottom(const State& st) {
     case Screen::Done:
         text("Gute Reise!", 160, 4, 0.6f, C_WHITE, CENTER);
         text(st.message, 160, 60, 0.48f, C_WHITE, CENTER, 300);
-        button(B_YES, "Spiel starten (A)", C_OK, C_WHITE, 0.5f);
+        button(B_YES, st.target && st.target->game->gen == 3 ? "Weiter (A)" : "Spiel starten (A)", C_OK, C_WHITE, 0.5f);
         button(B_NO, "Menü (B)", C_BG2, C_WHITE, 0.55f);
         break;
     case Screen::Error: {
@@ -731,7 +748,13 @@ bool travel(State& st, std::string& err) {
     // Gen 6/7 über SaveFile, Gen 1/2 über SaveGB
     std::unique_ptr<SaveFile> fromSav, toSav;
     SaveGB fromGB, toGB;
-    auto openAny = [&](const SaveSlot& s, const std::vector<u8>& data, std::unique_ptr<SaveFile>& sf, SaveGB& gb) {
+    SaveGBA fromGBA, toGBA;
+    auto openAny = [&](const SaveSlot& s, const std::vector<u8>& data, std::unique_ptr<SaveFile>& sf, SaveGB& gb, SaveGBA& gba) {
+        if (s.game->gen == 3) {
+            if (!gba.load(data, e)) { err = s.label() + ": " + e; return false; }
+            if (!gba.checksumsValid()) { err = s.label() + ": Prüfsummen stimmen nicht"; return false; }
+            return true;
+        }
         if (s.game->gen <= 2) {
             if (!gb.load(data, e)) { err = s.label() + ": " + e; return false; }
             if (!gb.checksumValid()) { err = s.label() + ": Prüfsumme stimmt nicht"; return false; }
@@ -742,8 +765,8 @@ bool travel(State& st, std::string& err) {
         if (!sf->valid()) { err = s.label() + ": Prüfsummen stimmen nicht"; return false; }
         return true;
     };
-    if ((from && !openAny(*from, fromData, fromSav, fromGB)) || !openAny(to, toData, toSav, toGB)) return false;
-    if (((from && from->game->gen <= 2) || to.game->gen <= 2) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
+    if ((from && !openAny(*from, fromData, fromSav, fromGB, fromGBA)) || !openAny(to, toData, toSav, toGB, toGBA)) return false;
+    if (((from && from->game->gen <= 3) || to.game->gen <= 3) && !g_species.loaded()) { err = "arten.bin fehlt auf der SD"; return false; }
     auto ctxFor = [&](const Game& g) { return gbCtx(g, st.bank.trainer); };
 
     step("Lege Sicherungen an");
@@ -753,8 +776,8 @@ bool travel(State& st, std::string& err) {
     timeStamp(stamp, sizeof stamp);
     std::vector<u8> bankData;
     readFileAll(BANK, bankData);
-    if ((from && !backup(stamp, from->label() + "-" + from->game->saveFile, fromData)) ||
-        !backup(stamp, to.label() + "-" + to.game->saveFile, toData) || !backup(stamp, "speicher.bin", bankData)) {
+    if ((from && !backup(stamp, from->label() + "-" + saveName(*from->game), fromData)) ||
+        !backup(stamp, to.label() + "-" + saveName(*to.game), toData) || !backup(stamp, "speicher.bin", bankData)) {
         err = "Sicherung fehlgeschlagen";
         return false;
     }
@@ -762,15 +785,26 @@ bool travel(State& st, std::string& err) {
     step("Übertrage Pokémon, Items und Geld");
     Bank bank = st.bank;
     if (from && st.synced) bank.leave(); // Stand wurde beim Start übernommen (plus Umräumen in der App)
-    else if (from && (from->game->gen <= 2 ? !bank.departGB(fromGB, ctxFor(*from->game), err) : !bank.depart(*fromSav, err))) return false;
+    else if (from && (from->game->gen == 3   ? !bank.departGBA(fromGBA, gbaCtx(*from->game, st.bank.trainer), err)
+                      : from->game->gen <= 2 ? !bank.departGB(fromGB, ctxFor(*from->game), err)
+                                             : !bank.depart(*fromSav, err)))
+        return false;
     int hidden = 0;
-    if (to.game->gen <= 2 ? !bank.arriveGB(toGB, ctxFor(*to.game), hidden, err) : !bank.arrive(*toSav, hidden, err)) return false;
+    if (to.game->gen == 3   ? !bank.arriveGBA(toGBA, gbaCtx(*to.game, bank.trainer), hidden, err)
+        : to.game->gen <= 2 ? !bank.arriveGB(toGB, ctxFor(*to.game), hidden, err)
+                            : !bank.arrive(*toSav, hidden, err))
+        return false;
     bank.currentLow = to.game->lowId;
     bank.currentMedia = u8(to.media);
 
     step(to.game->gen == 7 ? "Berechne Prüfsummen und Signatur" : "Berechne Prüfsummen");
     std::vector<u8> outData;
-    if (to.game->gen <= 2) {
+    if (to.game->gen == 3) {
+        toGBA.finalize();
+        SaveGBA check;
+        if (!check.load(toGBA.raw(), e) || !check.checksumsValid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
+        outData = toGBA.raw();
+    } else if (to.game->gen <= 2) {
         toGB.finalize();
         SaveGB check;
         if (!check.load(toGB.raw(), e) || !check.checksumValid()) { err = "Gegenprobe fehlgeschlagen, nichts geschrieben"; return false; }
@@ -822,8 +856,10 @@ void doLaunch(State& st) {
     if (launchGame(*st.target)) {
         st.quit = true;
     } else {
-        st.message = std::string("Spiel konnte nicht gestartet werden\nDie Reise ist erledigt.\nBitte starte ") +
-                     st.target->label() + " selbst.";
+        st.message = st.target->game->gen == 3
+                         ? "Reise erledigt\nStarte jetzt mGBA und lade\n" + st.target->label() + "."
+                         : std::string("Spiel konnte nicht gestartet werden\nDie Reise ist erledigt.\nBitte starte ") +
+                               st.target->label() + " selbst.";
         st.screen = Screen::Error;
     }
 }

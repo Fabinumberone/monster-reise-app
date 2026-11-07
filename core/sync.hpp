@@ -21,8 +21,8 @@ struct SyncInput {
     std::string label;          // „Omega Rubin (Modul)“
     uint32_t lowId = 0;
     uint8_t media = 1;          // 1 SD/installiert, 2 Modul
-    int gen = 6;                // 1, 2, 6, 7
-    uint8_t gbVersion = 37;     // Gen 1/2: Herkunft
+    int gen = 6;                // 1, 2, 3, 6, 7
+    uint8_t gbVersion = 37;     // Gen 1/2/3: Herkunft (Gen 3: für Pokémon aus späteren Spielen)
     uint8_t language = 5;       // Gen 1/2: Sprache
     bool current = false;       // hier befindet man sich gerade
     bool known = false;         // als bekannt eintragen (Items/Geld schon im Speicher; für ältere Speicher)

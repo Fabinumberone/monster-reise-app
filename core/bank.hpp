@@ -15,6 +15,8 @@
 #include <vector>
 
 #include "gb.hpp"
+#include "gba.hpp"
+#include "gbaconvert.hpp"
 #include "gbconvert.hpp"
 #include "savefile.hpp"
 
@@ -29,6 +31,8 @@ struct BankEntry {
     PK6 gen6;
     uint32_t gbKey = 0;    // Schlüssel des Gen-1/2-Stands (TID, DVs, OT-Name)
     GBMon gb;
+    bool hasGba = false;   // gba enthält den letzten Gen-3-Stand (wie zuletzt geschrieben/gelesen)
+    PK3 gba;
 };
 
 // Item im gemeinsamen Beutel. written = beim letzten Ankommen ins Spiel geschriebene Anzahl;
@@ -119,6 +123,12 @@ public:
     // neu aufgenommener Pokémon zurück.
     int addFromGB(const SaveGB& sav, const GBContext& ctx);
     bool arriveGB(SaveGB& sav, const GBContext& ctx, int& hidden, std::string& err);
+
+    // Gen 3 (mGBA). Boxen 1–14 entsprechen den Speicherboxen 1–14 (je 30 Plätze).
+    // Items: Items-, Ball- und Beerentasche + Item-PC; Reihenfolge wie bei Gen 1/2.
+    bool departGBA(const SaveGBA& sav, const GBAContext& ctx, std::string& err, bool stay = false);
+    bool arriveGBA(SaveGBA& sav, const GBAContext& ctx, int& hidden, std::string& err);
+    IntegrateResult integrateGBA(const SaveGBA& sav, const GBAContext& ctx, uint32_t lowId, uint8_t media, bool forceNew = false);
 
     // Bekannter Spielstand; record legt ihn an (Trainer wie im Spielstand), ohne Items zu übernehmen.
     BankSlot* slot(uint32_t lowId, uint8_t media);
