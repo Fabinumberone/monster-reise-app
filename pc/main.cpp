@@ -11,6 +11,8 @@
 #include "../core/bank.hpp"
 #include "../core/convert.hpp"
 #include "../core/gb.hpp"
+#include "../core/gbconvert.hpp"
+#include "../core/species.hpp"
 #include "../core/items.hpp"
 #include "../core/names.hpp"
 #include "../core/memecrypto.hpp"
@@ -296,10 +298,16 @@ static void printBank(const Bank& bank) {
     std::printf("\n");
     auto line =[](const char* lbl, const BankEntry& e) {
         printPk(lbl, e.pk);
-        std::printf("           %s%s  passt in: %s%s%s%s\n", e.inGame ? "im Spiel" : "nur im Speicher",
-                    e.hasGen6 ? ", Gen-6-Stand vorhanden" : "", fitsIn(e.pk, GameKind::XY) ? "XY " : "",
+        std::printf("           %s%s%s  passt in: %s%s%s%s%s%s\n", e.inGame ? "im Spiel" : "nur im Speicher",
+                    e.hasGen6 ? ", Gen-6-Stand" : "", e.hasGb ? ", GB-Stand" : "", fitsGB(e.pk, 1) ? "RBY " : "",
+                    fitsGB(e.pk, 2) ? "GSC " : "", fitsIn(e.pk, GameKind::XY) ? "XY " : "",
                     fitsIn(e.pk, GameKind::ORAS) ? "ORAS " : "", fitsIn(e.pk, GameKind::SM) ? "SM " : "",
                     fitsIn(e.pk, GameKind::USUM) ? "USUM" : "");
+        if (e.used) {
+            std::printf("           Level %u, Wesen %u, Fähigkeit %u, IVs %08X, Item %s, Herkunft %u, Sprache %u\n", e.pk.partyLevel(),
+                        e.pk.d[0x1C], e.pk.ability(), unsigned(e.pk.iv32()),
+                        e.pk.heldItem() ? g_names.item(e.pk.heldItem()).c_str() : "-", e.pk.version(), e.pk.language());
+        }
     };
     std::printf("Team:\n");
     for (int i = 0; i < Bank::PARTY; i++)
@@ -338,22 +346,93 @@ static int cmdSpeicherNeu(int argc, char** argv) {
 }
 
 // reise <speicher> <von> <nach>: Stand aus „von“ übernehmen und in „nach“ schreiben.
-static int cmdReise(const char* bankPath, const char* fromPath, const char* toPath) {
+// ---------- Gen-1/2-Hilfen ----------
+static SpeciesData g_species; // arten.bin von der Azahar-SD
+
+// Pfad mit optionaler Sprache davor: "en:pfad" oder "de:pfad" (Standard Deutsch).
+static std::string splitLang(const std::string& arg, uint8_t& lang) {
+    lang = 5;
+    if (arg.rfind("en:", 0) == 0) { lang = 2; return arg.substr(3); }
+    if (arg.rfind("de:", 0) == 0) return arg.substr(3);
+    return arg;
+}
+
+static bool isGBFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    auto n = f ? f.tellg() : std::streampos(0);
+    return n == 0x8000 || n == 0x8010;
+}
+
+static bool loadGB(const std::string& path, SaveGB& s) {
+    std::vector<uint8_t> data;
+    std::string err;
+    if (!readFile(path, data) || !s.load(std::move(data), err)) { std::fprintf(stderr, "%s: %s\n", path.c_str(), err.c_str()); return false; }
+    if (!s.checksumValid()) { std::fprintf(stderr, "%s: Prüfsumme stimmt schon vorher nicht\n", path.c_str()); return false; }
+    return true;
+}
+
+static GBContext makeCtx(const SaveGB& s, uint8_t lang, const Trainer6& trainer) {
+    GBContext c;
+    c.species = &g_species;
+    c.names = &g_names;
+    c.trainer = trainer;
+    c.gen = s.generation();
+    c.language = lang;
+    if (s.game() == GBGame::RBY) c.version = s.raw()[0x29C3] == 0x54 ? 38 : 37; // Gelb (Starter Pikachu) / Blau
+    else c.version = s.game() == GBGame::Crystal ? 41 : 39;
+    return c;
+}
+
+static bool writeGB(const std::string& path, SaveGB& s) {
+    s.finalize();
+    SaveGB check;
+    std::string err;
+    if (!check.load(s.raw(), err) || !check.checksumValid()) { std::fprintf(stderr, "Gegenprobe fehlgeschlagen, nichts geschrieben\n"); return false; }
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(s.raw().data()), std::streamsize(s.raw().size()));
+    return bool(f);
+}
+
+static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg) {
+    if (!g_species.loaded()) { std::fprintf(stderr, "arten.bin fehlt (tools/gen-arten.mjs)\n"); return 1; }
     Bank bank;
     std::string err;
     if (!bank.load(bankPath, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
-    auto from = open(fromPath, true), to = open(toPath, true);
-    if (!from || !to) return 1;
-    if (!bank.depart(*from, err)) { std::fprintf(stderr, "Abreise: %s\n", err.c_str()); return 1; }
+    uint8_t fromLang, toLang;
+    std::string fromPath = splitLang(fromArg, fromLang), toPath = splitLang(toArg, toLang);
+
+    std::string fromTitle, toTitle;
+    if (isGBFile(fromPath)) {
+        SaveGB from;
+        if (!loadGB(fromPath, from)) return 1;
+        if (!bank.departGB(from, makeCtx(from, fromLang, bank.trainer), err)) { std::fprintf(stderr, "Abreise: %s\n", err.c_str()); return 1; }
+        fromTitle = gbGameName(from.game());
+    } else {
+        auto from = open(fromPath, true);
+        if (!from) return 1;
+        if (!bank.depart(*from, err)) { std::fprintf(stderr, "Abreise: %s\n", err.c_str()); return 1; }
+        fromTitle = from->gameTitle();
+    }
     int hidden = 0;
-    if (!bank.arrive(*to, hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
-    if (!writeSave(toPath, *to)) return 1;
+    if (isGBFile(toPath)) {
+        SaveGB to;
+        if (!loadGB(toPath, to)) return 1;
+        if (!bank.arriveGB(to, makeCtx(to, toLang, bank.trainer), hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
+        if (!writeGB(toPath, to)) return 1;
+        toTitle = gbGameName(to.game());
+    } else {
+        auto to = open(toPath, true);
+        if (!to) return 1;
+        if (!bank.arrive(*to, hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
+        if (!writeSave(toPath, *to)) return 1;
+        toTitle = to->gameTitle();
+    }
     if (!bank.save(bankPath, err)) {
         std::fprintf(stderr, "ACHTUNG: Zielspiel geschrieben, aber Speicher nicht: %s\n", err.c_str());
         return 1;
     }
-    std::printf("Gereist von %s nach %s: %d Pokémon, davon %d dort nicht sichtbar\n", from->gameTitle(),
-                to->gameTitle(), bank.count(), hidden);
+    std::printf("Gereist von %s nach %s: %d Pokémon, davon %d dort nicht sichtbar\n", fromTitle.c_str(), toTitle.c_str(),
+                bank.count(), hidden);
     return 0;
 }
 
@@ -420,8 +499,10 @@ static int cmdInfoGB(const std::string& path) {
 int runSelftest();
 
 int main(int argc, char** argv) {
-    if (const char* appdata = std::getenv("APPDATA"))
+    if (const char* appdata = std::getenv("APPDATA")) {
         g_names.load(std::string(appdata) + "\\Azahar\\sdmc\\pokemon-world-3d\\namen.txt");
+        g_species.load(std::string(appdata) + "\\Azahar\\sdmc\\pokemon-world-3d\\arten.bin");
+    }
     std::string cmd = argc > 1 ? argv[1] : "";
     if (cmd == "selbsttest" && argc == 2) return runSelftest();
     if (cmd == "info" && argc == 3) {
@@ -457,6 +538,23 @@ int main(int argc, char** argv) {
         if (!written.back()) { std::fprintf(stderr, "Item passt in diesem Spiel in keine reisende Tasche\n"); return 1; }
         if (!writeSave(argv[2], *s)) return 1;
         std::printf("Item %s × %s hinzugefügt\n", argv[3], argv[4]);
+        return 0;
+    }
+    if (cmd == "speicher-gb" && argc >= 4) { // Gen-1/2-Spielstände einmalig dazulegen
+        if (!g_species.loaded()) { std::fprintf(stderr, "arten.bin fehlt\n"); return 1; }
+        Bank bank;
+        std::string err;
+        if (!bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        for (int i = 3; i < argc; i++) {
+            uint8_t lang;
+            std::string p = splitLang(argv[i], lang);
+            SaveGB s;
+            if (!loadGB(p, s)) return 1;
+            int n = bank.addFromGB(s, makeCtx(s, lang, bank.trainer));
+            std::printf("%s: %d Pokémon übernommen\n", gbGameName(s.game()), n);
+        }
+        if (!bank.save(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        printBank(bank);
         return 0;
     }
     if (cmd == "speicher-items" && argc >= 4) { // Items weiterer Spielstände einmalig dazulegen

@@ -47,11 +47,15 @@ struct GBMon {
     uint8_t friendship = 0;           // Gen 2
     uint16_t hp = 0, maxHp = 0;
     std::string nickname, ot;
+    std::array<uint8_t, 11> nickRaw{}, otRaw{}; // Namen im Spiel-Zeichensatz
     std::vector<uint8_t> raw;         // Datensatz wie gespeichert (33/44 bzw. 32/48 Byte)
 
     bool shiny() const;    // nach Gen-2-Regel aus den DVs
     uint8_t dv(int i) const { return uint8_t((dvs >> (12 - 4 * i)) & 15); } // 0 Atk, 1 Def, 2 Init, 3 Spez
 };
+
+// Einen Datensatz (Team- oder Boxformat, je nach len) mit Namen im Spiel-Zeichensatz auslesen.
+GBMon gbFromRaw(int gen, const uint8_t* raw, size_t len, const uint8_t* otRaw, const uint8_t* nickRaw);
 
 struct GBItem {
     uint8_t id = 0;
@@ -83,9 +87,23 @@ public:
 
     const std::vector<uint8_t>& raw() const { return data_; }
 
+    // ---- Schreiben (finalize() danach aufrufen) ----
+    void setParty(const std::vector<GBMon>& mons);     // raw im Teamformat
+    void setBox(int b, const std::vector<GBMon>& mons); // raw im Team- oder Boxformat
+    void setBag(const std::vector<GBItem>& items);
+    void setBalls(const std::vector<GBItem>& items);
+    void setPcItems(const std::vector<GBItem>& items);
+    void setMoney(uint32_t v);
+    void setTrainer(const std::string& name, uint16_t tid);
+    void registerDex(uint16_t species);
+    // Prüfsummen (Gen 1 inkl. Box-Bänke und „Boxen eingerichtet“), Gen 2 inkl. Sicherungskopie.
+    void finalize();
+
 private:
     std::vector<GBMon> readList(uint32_t ofs, int capacity, bool party) const;
     std::vector<GBItem> readItems(uint32_t ofs, int capacity) const;
+    void writeList(uint32_t ofs, int capacity, bool party, const std::vector<GBMon>& mons);
+    void writeItems(uint32_t ofs, int capacity, const std::vector<GBItem>& items);
     uint32_t boxOffset(int b) const;
 
     std::vector<uint8_t> data_;

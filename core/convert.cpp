@@ -14,13 +14,14 @@ struct Limits {
 };
 
 // Höchste gültige Werte je Spiel (Arten, Attacken, Items, Fähigkeiten, Bälle, Herkunftsspiel).
-// Gen 6 nimmt konservativ nur Pokémon aus Gen-6-Spielen oder älter (Version ≤ 27) an.
+// Gen 6 nimmt konservativ nur Pokémon aus Gen-6-Spielen oder älter (Version ≤ 27) an; Gen 7 auch
+// Virtual-Console-Herkunft (35–41 Rot … Kristall), wie über Poké Transporter.
 Limits limitsOf(GameKind k) {
     switch (k) {
     case GameKind::XY: return {721, 621, 717, 191, 25, 27};
     case GameKind::ORAS: return {721, 621, 775, 191, 25, 27};
-    case GameKind::SM: return {802, 720, 920, 233, 26, 33};
-    case GameKind::USUM: return {807, 728, 959, 233, 26, 33};
+    case GameKind::SM: return {802, 720, 920, 233, 26, 41};
+    case GameKind::USUM: return {807, 728, 959, 233, 26, 41};
     }
     return {0, 0, 0, 0, 0, 0};
 }

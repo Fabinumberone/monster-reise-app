@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "gb.hpp"
+#include "gbconvert.hpp"
 #include "savefile.hpp"
 
 namespace pw3d {
@@ -22,8 +24,11 @@ struct BankEntry {
     bool used = false;
     bool inGame = false;   // beim letzten Ankommen ins aktuelle Spiel geschrieben
     bool hasGen6 = false;  // gen6 enthält den letzten Gen-6-Stand
+    bool hasGb = false;    // gb enthält den letzten Gen-1/2-Stand (wie zuletzt geschrieben/gelesen)
     PK6 pk;                // Gen-7-Form, Teamformat (0x104)
     PK6 gen6;
+    uint32_t gbKey = 0;    // Schlüssel des Gen-1/2-Stands (TID, DVs, OT-Name)
+    GBMon gb;
 };
 
 // Item im gemeinsamen Beutel. written = beim letzten Ankommen ins Spiel geschriebene Anzahl;
@@ -60,6 +65,17 @@ public:
     // In das Zielspiel schreiben (Team, Boxen, Pokédex, Trainer). finalize() macht der Aufrufer.
     // Gibt die Anzahl der nicht angezeigten Pokémon in hidden zurück.
     bool arrive(SaveFile& sav, int& hidden, std::string& err);
+
+    // Dasselbe für Gen-1/2-Spiele (Virtual Console). Boxen werden linear abgebildet:
+    // GB-Box b, Platz i <-> Speicherplatz b·20+i (zählend über alle Speicherboxen).
+    // Items: Gen 1 Beutel (20) + Item-PC (50), Gen 2 Item-Tasche (20), Ball-Tasche (12), Item-PC (50);
+    // Reihenfolge beim Ankommen: Bälle, Medizin, Schutz, Rest; höchstens 99 je Item.
+    bool departGB(const SaveGB& sav, const GBContext& ctx, std::string& err);
+    // Pokémon und Items eines GB-Spielstands, in dem man (noch) nicht ist, einmalig dazulegen
+    // (unsichtbar im aktuellen Spiel; Team, falls Platz, sonst freie Boxplätze). Gibt die Anzahl
+    // neu aufgenommener Pokémon zurück.
+    int addFromGB(const SaveGB& sav, const GBContext& ctx);
+    bool arriveGB(SaveGB& sav, const GBContext& ctx, int& hidden, std::string& err);
 
     int count() const;
 

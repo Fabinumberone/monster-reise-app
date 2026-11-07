@@ -1,5 +1,6 @@
 #include "gb.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace pw3d {
@@ -248,39 +249,44 @@ std::vector<GBMon> SaveGB::readList(uint32_t ofs, int capacity, bool party) cons
     uint32_t mons = ofs + 1 + capacity + 1;
     uint32_t ots = mons + capacity * size;
     uint32_t nicks = ots + capacity * 11;
-    for (int i = 0; i < count; i++) {
-        const uint8_t* m = &data_[mons + i * size];
-        GBMon g;
-        g.gen = generation();
-        g.raw.assign(m, m + size);
-        g.ot = gbToUtf8(&data_[ots + i * 11], 11);
-        g.nickname = gbToUtf8(&data_[nicks + i * 11], 11);
-        if (game_ == GBGame::RBY) {
-            g.species = gen1InternalToNational(m[0]);
-            g.hp = be16(m + 1);
-            g.level = party ? m[33] : m[3];
-            g.heldItem = m[7];
-            for (int k = 0; k < 4; k++) { g.moves[k] = m[8 + k]; g.pp[k] = m[29 + k]; }
-            g.tid = be16(m + 12);
-            g.exp = be24(m + 14);
-            for (int k = 0; k < 5; k++) g.statExp[k] = be16(m + 17 + k * 2);
-            g.dvs = be16(m + 27);
-            if (party) g.maxHp = be16(m + 34);
-        } else {
-            g.species = m[0];
-            g.heldItem = m[1];
-            for (int k = 0; k < 4; k++) { g.moves[k] = m[2 + k]; g.pp[k] = m[23 + k]; }
-            g.tid = be16(m + 6);
-            g.exp = be24(m + 8);
-            for (int k = 0; k < 5; k++) g.statExp[k] = be16(m + 11 + k * 2);
-            g.dvs = be16(m + 21);
-            g.friendship = m[27];
-            g.level = m[31];
-            if (party) { g.hp = be16(m + 34); g.maxHp = be16(m + 36); }
-        }
-        out.push_back(g);
-    }
+    for (int i = 0; i < count; i++)
+        out.push_back(gbFromRaw(generation(), &data_[mons + i * size], size_t(size), &data_[ots + i * 11], &data_[nicks + i * 11]));
     return out;
+}
+
+GBMon gbFromRaw(int gen, const uint8_t* m, size_t len, const uint8_t* otRaw, const uint8_t* nickRaw) {
+    GBMon g;
+    g.gen = gen;
+    g.raw.assign(m, m + len);
+    std::memcpy(g.otRaw.data(), otRaw, 11);
+    std::memcpy(g.nickRaw.data(), nickRaw, 11);
+    g.ot = gbToUtf8(otRaw, 11);
+    g.nickname = gbToUtf8(nickRaw, 11);
+    bool party = len >= (gen == 1 ? 44u : 48u);
+    if (gen == 1) {
+        g.species = gen1InternalToNational(m[0]);
+        g.hp = be16(m + 1);
+        g.level = party ? m[33] : m[3];
+        g.heldItem = m[7];
+        for (int k = 0; k < 4; k++) { g.moves[k] = m[8 + k]; g.pp[k] = m[29 + k]; }
+        g.tid = be16(m + 12);
+        g.exp = be24(m + 14);
+        for (int k = 0; k < 5; k++) g.statExp[k] = be16(m + 17 + k * 2);
+        g.dvs = be16(m + 27);
+        if (party) g.maxHp = be16(m + 34);
+    } else {
+        g.species = m[0];
+        g.heldItem = m[1];
+        for (int k = 0; k < 4; k++) { g.moves[k] = m[2 + k]; g.pp[k] = m[23 + k]; }
+        g.tid = be16(m + 6);
+        g.exp = be24(m + 8);
+        for (int k = 0; k < 5; k++) g.statExp[k] = be16(m + 11 + k * 2);
+        g.dvs = be16(m + 21);
+        g.friendship = m[27];
+        g.level = m[31];
+        if (party) { g.hp = be16(m + 34); g.maxHp = be16(m + 36); }
+    }
+    return g;
 }
 
 std::vector<GBMon> SaveGB::party() const { return readList(layoutOf(game_).party, 6, true); }
@@ -301,6 +307,107 @@ std::vector<GBItem> SaveGB::readItems(uint32_t ofs, int capacity) const {
 std::vector<GBItem> SaveGB::bag() const { return readItems(layoutOf(game_).bag, 20); }
 std::vector<GBItem> SaveGB::balls() const { return game_ == GBGame::RBY ? std::vector<GBItem>{} : readItems(layoutOf(game_).balls, 12); }
 std::vector<GBItem> SaveGB::pcItems() const { return readItems(layoutOf(game_).pc, 50); }
+
+// ---------- Schreiben ----------
+
+void SaveGB::writeList(uint32_t ofs, int capacity, bool party, const std::vector<GBMon>& mons) {
+    const Layout& L = layoutOf(game_);
+    int size = party ? L.partySize : L.storedSize;
+    int n = int(std::min<size_t>(mons.size(), size_t(capacity)));
+    uint32_t total = 1 + capacity + 1 + capacity * (size + 22);
+    std::memset(&data_[ofs], 0, total);
+    data_[ofs] = uint8_t(n);
+    uint32_t mons0 = ofs + 1 + capacity + 1, ots = mons0 + capacity * size, nicks = ots + capacity * 11;
+    for (int i = 0; i <= capacity; i++) data_[ofs + 1 + i] = 0xFF;
+    for (int i = 0; i < n; i++) {
+        const GBMon& m = mons[size_t(i)];
+        data_[ofs + 1 + i] = game_ == GBGame::RBY ? gen1NationalToInternal(m.species) : uint8_t(m.species);
+        std::memcpy(&data_[mons0 + i * size], m.raw.data(), std::min<size_t>(m.raw.size(), size_t(size)));
+        if (game_ == GBGame::RBY && !party) data_[mons0 + i * size + 3] = m.level; // Box-Level
+        std::memcpy(&data_[ots + i * 11], m.otRaw.data(), 11);
+        std::memcpy(&data_[nicks + i * 11], m.nickRaw.data(), 11);
+    }
+}
+
+void SaveGB::writeItems(uint32_t ofs, int capacity, const std::vector<GBItem>& items) {
+    int n = int(std::min<size_t>(items.size(), size_t(capacity)));
+    std::memset(&data_[ofs], 0, 2 + capacity * 2);
+    data_[ofs] = uint8_t(n);
+    for (int i = 0; i < n; i++) {
+        data_[ofs + 1 + i * 2] = items[size_t(i)].id;
+        data_[ofs + 2 + i * 2] = items[size_t(i)].count;
+    }
+    data_[ofs + 1 + n * 2] = 0xFF;
+}
+
+void SaveGB::setParty(const std::vector<GBMon>& mons) { writeList(layoutOf(game_).party, 6, true, mons); }
+
+void SaveGB::setBox(int b, const std::vector<GBMon>& mons) {
+    writeList(boxOffset(b), 20, false, mons);
+    if (b == currentBox()) writeList(layoutOf(game_).currentBox, 20, false, mons);
+}
+
+void SaveGB::setBag(const std::vector<GBItem>& items) { writeItems(layoutOf(game_).bag, 20, items); }
+void SaveGB::setBalls(const std::vector<GBItem>& items) {
+    if (game_ != GBGame::RBY) writeItems(layoutOf(game_).balls, 12, items);
+}
+void SaveGB::setPcItems(const std::vector<GBItem>& items) { writeItems(layoutOf(game_).pc, 50, items); }
+
+void SaveGB::setMoney(uint32_t v) {
+    if (v > 999999) v = 999999;
+    uint8_t* p = &data_[layoutOf(game_).money];
+    if (game_ != GBGame::RBY) { p[0] = uint8_t(v >> 16); p[1] = uint8_t(v >> 8); p[2] = uint8_t(v); return; }
+    for (int i = 2; i >= 0; i--) { p[i] = uint8_t((v % 10) | ((v / 10 % 10) << 4)); v /= 100; }
+}
+
+void SaveGB::setTrainer(const std::string& name, uint16_t tid) {
+    const Layout& L = layoutOf(game_);
+    utf8ToGb(name, &data_[L.trainerName], 11);
+    data_[L.tid] = uint8_t(tid >> 8);
+    data_[L.tid + 1] = uint8_t(tid);
+}
+
+void SaveGB::registerDex(uint16_t species) {
+    if (species == 0 || species > (game_ == GBGame::RBY ? 151 : 251)) return;
+    uint32_t caught = game_ == GBGame::RBY ? 0x25A3 : game_ == GBGame::Crystal ? 0x2A27 : 0x2A4C;
+    uint32_t seen = game_ == GBGame::RBY ? 0x25B6 : game_ == GBGame::Crystal ? 0x2A47 : 0x2A6C;
+    int bit = species - 1;
+    data_[caught + bit / 8] |= uint8_t(1 << (bit % 8));
+    data_[seen + bit / 8] |= uint8_t(1 << (bit % 8));
+}
+
+void SaveGB::finalize() {
+    const Layout& L = layoutOf(game_);
+    if (game_ == GBGame::RBY) {
+        data_[L.currentBoxIndex] |= 0x80; // Boxen eingerichtet (sonst leert das Spiel sie beim Box-Wechsel)
+        const uint32_t listSize = (33 + 1 + 22) * 20 + 2;
+        for (uint32_t bank : {0x4000u, 0x6000u}) {
+            auto sum = [&](uint32_t a, uint32_t n) { uint8_t s = 0; for (uint32_t i = 0; i < n; i++) s = uint8_t(s + data_[a + i]); return uint8_t(~s); };
+            data_[bank + 6 * listSize] = sum(bank, 6 * listSize);
+            for (uint32_t b = 0; b < 6; b++) data_[bank + 6 * listSize + 1 + b] = sum(bank + b * listSize, listSize);
+        }
+        uint8_t s = 0;
+        for (uint32_t i = L.sumStart; i <= L.sumEnd; i++) s = uint8_t(s + data_[i]);
+        data_[L.sum1] = uint8_t(~s);
+        return;
+    }
+    uint16_t s = 0;
+    for (uint32_t i = L.sumStart; i <= L.sumEnd; i++) s = uint16_t(s + data_[i]);
+    data_[L.sum1] = uint8_t(s);
+    data_[L.sum1 + 1] = uint8_t(s >> 8);
+    data_[L.sum2] = uint8_t(s);
+    data_[L.sum2 + 1] = uint8_t(s >> 8);
+    // Sicherungskopie des Hauptbereichs (nach PKHeX SAV2.GetFinalData, international)
+    if (game_ == GBGame::Crystal) {
+        std::memcpy(&data_[0x1209], &data_[0x2009], 0xB7A);
+    } else {
+        std::memcpy(&data_[0x15C7], &data_[0x2009], 0x222F - 0x2009);
+        std::memcpy(&data_[0x3D69], &data_[0x222F], 0x23D9 - 0x222F);
+        std::memcpy(&data_[0x0C6B], &data_[0x23D9], 0x2856 - 0x23D9);
+        std::memcpy(&data_[0x7E39], &data_[0x2856], 0x288A - 0x2856);
+        std::memcpy(&data_[0x10E8], &data_[0x288A], 0x2D69 - 0x288A);
+    }
+}
 
 std::vector<uint8_t> SaveGB::keyItems() const {
     std::vector<uint8_t> out;

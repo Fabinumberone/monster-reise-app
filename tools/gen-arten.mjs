@@ -6,11 +6,12 @@
 // Nicht mitgeliefert, nicht committet, liegt nur auf der SD.
 //   node tools/gen-arten.mjs [um-dump] [ausgabe]
 //
-// arten.bin: "PW3DARTN", u32 1, u16 Arten (807), u16 Satzgröße (20), dann je Art 0..807:
+// arten.bin: "PW3DARTN", u32 1, u16 Arten (807), u16 Satzgröße (26), dann je Art 0..807:
 //   u8 Wachstum, u8 Geschlecht (0 nur ♂ … 254 nur ♀, 255 keins), u8 Fähigkeit 1, 2, versteckt,
 //   u8 Grundfreundschaft,
 //   Gen 1 (0 wenn unbekannt): u8 KP, Ang, Ver, Init, Spez, u8 Typ 1, Typ 2, u8 Fangrate,
-//   Gen 2: u8 KP, Ang, Ver, Init, SpAng, SpVer.
+//   Gen 2: u8 KP, Ang, Ver, Init, SpAng, SpVer,
+//   Gen 7: u8 KP, Ang, Ver, Init, SpAng, SpVer (Basiswerte).
 import fs from 'node:fs';
 import path from 'node:path';
 import { readGarc } from './lib/garc.mjs';
@@ -20,7 +21,7 @@ const root = path.join(import.meta.dirname, '..');
 const dump = process.argv[2] ?? path.join(root, 'extracted', 'um');
 const sd = path.join(process.env.APPDATA, 'Azahar', 'sdmc');
 const out = process.argv[3] ?? path.join(sd, 'pokemon-world-3d', 'arten.bin');
-const SPECIES = 807, REC = 20;
+const SPECIES = 807, REC = 26;
 
 const pers = readGarc(path.join(dump, 'romfs', 'a', '0', '1', '7'));
 
@@ -70,6 +71,7 @@ for (let s = 1; s <= SPECIES; s++) {
   outBuf[o] = p[0x15]; outBuf[o + 1] = p[0x12];
   outBuf[o + 2] = p[0x18]; outBuf[o + 3] = p[0x19]; outBuf[o + 4] = p[0x1a];
   outBuf[o + 5] = p[0x14];
+  p.copy(outBuf, o + 20, 0, 6); // Gen-7-Basiswerte: KP, Ang, Ver, Init, SpAng, SpVer
   if (gen1 && s <= 151) {
     const e = s === 151 ? gen1.mew : gen1.table + (s - 1) * 28;
     if (gen1.data[e] !== s) throw new Error(`Gen-1-Tabelle passt nicht bei Art ${s}`);

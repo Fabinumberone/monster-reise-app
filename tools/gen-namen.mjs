@@ -3,7 +3,7 @@
 // nicht committet, sondern liegt nur auf der SD-Karte.
 //   node tools/gen-namen.mjs [romfs-ordner] [ausgabe]
 //   Standard: extracted/um/romfs  ->  %APPDATA%\Azahar\sdmc\pokemon-world-3d\namen.txt
-// Format: UTF-8, je Zeile „P|I|A <Tab> Nummer <Tab> Name“.
+// Format: UTF-8, je Zeile „P|I|A|E <Tab> Nummer <Tab> Name“ (E = englischer Artname).
 import fs from 'node:fs';
 import path from 'node:path';
 import { readGarc } from './lib/garc.mjs';
@@ -25,6 +25,10 @@ const add = (tag, list) => list.forEach((n, i) => { if (i > 0 && n && n !== '???
 add('P', species);
 add('I', items);
 add('A', moves);
+// Englische Artnamen (für die Spitznamen-Erkennung bei englischen Gen-1/2-Spielen)
+const en = readGfText(readGarc(path.join(romfs, 'a', '0', '3', '2'))[60][0]);
+if (en[255] !== 'Torchic') throw new Error('Englische Artnamen nicht gefunden');
+add('E', en);
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, lines.join('\n') + '\n', 'utf8');
 console.log(`${lines.length} Namen -> ${out}`);
