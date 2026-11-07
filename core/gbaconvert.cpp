@@ -1,6 +1,7 @@
 #include "gbaconvert.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cstring>
 #include <ctime>
@@ -129,6 +130,27 @@ uint8_t gen3OriginVersion(const SaveGBA& s) {
     return s.game() == GBAGame::RS ? 2 : s.game() == GBAGame::E ? 3 : 4;
 }
 
+uint8_t versionFromFileName(const std::string& fn) {
+    std::string s;
+    for (char c : fn) s += char(std::tolower(static_cast<unsigned char>(c)));
+    auto has = [&](const char* k) { return s.find(k) != std::string::npos; };
+    if (has("schwarz 2") || has("black 2")) return 23;
+    if (has("weiss 2") || has("weiß 2") || has("white 2")) return 22;
+    if (has("schwarz") || has("black")) return 21;
+    if (has("weiss") || has("weiß") || has("white")) return 20;
+    if (has("platin")) return 12;
+    if (has("perl") || has("pearl")) return 11;
+    if (has("diamant") || has("diamond")) return 10;
+    if (has("soul") ) return 8;
+    if (has("heart")) return 7;
+    if (has("blattgr") || has("leafgreen") || has("leaf green")) return 5;
+    if (has("feuerrot") || has("firered") || has("fire red")) return 4;
+    if (has("smaragd") || has("emerald")) return 3;
+    if (has("rubin") || has("ruby")) return 2;
+    if (has("saphir") || has("sapphire")) return 1;
+    return 0;
+}
+
 bool fitsGen3(const PK6& pk) {
     uint16_t s = pk.species();
     if (s == 0 || s > 386) return false;
@@ -147,7 +169,8 @@ PK6 gen3ToPk7(const PK3& g, const GBAContext& ctx) {
     uint8_t* d = pk.d.data();
     uint32_t pid = g.pid();
     std::string ot = g.otName();
-    bool own = isOwnGen3(g.tid(), g.sid(), ot, ctx);
+    bool own = false; // Umschreiben übernimmt der Speicher (Schillern bleibt erhalten)
+    (void)isOwnGen3;
 
     wr32(d, pid); // EC = PID (wie Poké Transporter)
     wr16(d + O_SPECIES, species);

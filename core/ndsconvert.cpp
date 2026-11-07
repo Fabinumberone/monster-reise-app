@@ -163,7 +163,8 @@ PK6 gen45ToPk7(const PK45& n, const NDSContext& ctx) {
     uint8_t* d = pk.d.data();
     uint32_t pid = n.pid();
     std::string ot = n.otName();
-    bool own = isOwn45(n.tid(), n.sid(), ot, ctx);
+    bool own = false; // Umschreiben übernimmt der Speicher (Schillern bleibt erhalten)
+    (void)isOwn45;
 
     wr32(d, pid); // EC = PID (Poké Transporter)
     wr16(d + O_SPECIES, species);

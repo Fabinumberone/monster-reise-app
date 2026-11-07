@@ -26,6 +26,7 @@ namespace pw3d {
 
 struct BankEntry {
     bool used = false;
+    uint32_t uid = 0;      // feste Kennung im Speicher (für die je Spielstand geschriebenen Datensätze)
     bool inGame = false;   // beim letzten Ankommen ins aktuelle Spiel geschrieben
     bool hasGen6 = false;  // gen6 enthält den letzten Gen-6-Stand
     bool hasGb = false;    // gb enthält den letzten Gen-1/2-Stand (wie zuletzt geschrieben/gelesen)
@@ -44,11 +45,25 @@ struct BankEntry {
 // Ein Spielstand, den der Speicher kennt (Spiel + Medium) und sein ursprünglicher Trainer.
 // Zeigt ein Spielstand später einen anderen Trainer (weder diesen noch den des Speichers),
 // wurde dort ein neues Spiel begonnen.
+// Was zuletzt in einen Spielstand geschrieben wurde (für „alle Spielstände aktuell“, world.hpp).
+struct WrittenMon {
+    uint32_t uid = 0;
+    uint8_t flags = 0;          // 1 im Team, 2 geliehen (aus dem PC ins Team aufgefüllt)
+    std::vector<uint8_t> rec;   // Gen 6/7: Schlüssel + Prüfwert (16 Byte); sonst der Datensatz
+};
+
 struct BankSlot {
     uint32_t lowId = 0;
     uint8_t media = 0; // 1 SD/installiert, 2 Modul (wie FS_MediaType)
     uint8_t gen = 0;
     Trainer6 trainer;  // bei Gen 1/2: sid = 0
+    // Version 8
+    bool synced = false;        // vom neuen Abgleich geschrieben
+    uint8_t version = 0;        // Gen 1–5: Herkunftsspiel des Spielstands (beim ersten Kontakt festgelegt)
+    uint64_t fingerprint = 0;   // der Datei nach dem letzten Schreiben
+    uint32_t money = 0;         // geschriebenes Geld
+    std::vector<std::pair<uint16_t, uint16_t>> items; // geschriebene Items (heutige Nummer, Anzahl)
+    std::vector<WrittenMon> mons;
 };
 
 // Ergebnis des Einlesens eines Spielstands, in dem man gerade nicht ist.
@@ -86,6 +101,7 @@ public:
     std::vector<BankSlot> slots; // bekannte Spielstände
     std::vector<uint64_t> seen;  // je gesehene Pokémon (EC·2^32 + PID), auch freigelassene
     std::vector<uint64_t> seenGb; // je gesehene Gen-1/2-Pokémon (GB-Schlüssel·2^16 + Familie)
+    uint32_t nextUid = 1;        // Version 8
     uint32_t fileVersion = 0;    // Version der zuletzt geladenen Datei (unter 4: Spielstände noch nicht erfasst)
     const SpeciesData* species = nullptr; // für die Familie der Gen-1/2-Pokémon (vom Aufrufer gesetzt)
 
@@ -152,12 +168,19 @@ public:
     void remember();
 
     int count() const;
+    void ensureUids(); // fehlende Kennungen vergeben
 
     std::vector<uint8_t> serialize() const;
     bool save(const std::string& path, std::string& err) const;
     bool load(const std::string& path, std::string& err);
 
 private:
+    friend struct WorldImpl;
+    // Items (reisende Taschen, Rangfolge), Geld und Trainer in einen Spielstand schreiben.
+    void writeMeta(SaveFile& sav);
+    void writeMetaGB(SaveGB& sav);
+    void writeMetaGBA(SaveGBA& sav);
+    void writeMetaNDS(SaveNDS& sav);
     BankEntry* find(const PK6& pk);
     bool ownTrainer(uint16_t tid, uint16_t sid, const std::string& name, bool gb) const;
     uint16_t familyOf(uint16_t s) const { return species ? species->family(s) : s; }

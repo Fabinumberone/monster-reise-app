@@ -43,6 +43,10 @@ bool fitsGen3(const PK6& pk7);
 // sonst nach Spiel (Rubin, Smaragd, Feuerrot).
 uint8_t gen3OriginVersion(const SaveGBA& s);
 
+// Herkunftsspiel aus dem Dateinamen (z. B. „Pokemon Feuerrote Edition.sav“, „Weiss 2“, „Heart Gold“);
+// 0, wenn nichts passt. Gilt für Gen 3–5.
+uint8_t versionFromFileName(const std::string& fileName);
+
 PK6 gen3ToPk7(const PK3& pk, const GBAContext& ctx);
 PK3 pk7ToGen3(const PK6& pk7, const PK3* snap, const GBAContext& ctx);
 void mergeGen3(PK6& pk7, const PK3& now, const PK3& before, const GBAContext& ctx);

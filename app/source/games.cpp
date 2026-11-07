@@ -75,7 +75,8 @@ const std::vector<Game>& fileGames() {
             if (!dir.nds && n >= 0x20000 && n <= 0x20100) {
                 pw3d::SaveGBA s;
                 if (!s.load(data, err)) continue;
-                u8 ver = pw3d::gen3OriginVersion(s);
+                u8 ver = pw3d::versionFromFileName(fn);
+                if (ver < 1 || ver > 5) ver = pw3d::gen3OriginVersion(s);
                 const char* name = ver == 1 ? "Saphir" : ver == 2 ? "Rubin" : ver == 3 ? "Smaragd" : ver == 4 ? "Feuerrot" : "Blattgrün";
                 if (s.game() == pw3d::GBAGame::E) name = "Smaragd";
                 const char* kind = s.game() == pw3d::GBAGame::RS ? "GBA-RS" : s.game() == pw3d::GBAGame::E ? "GBA-E" : "GBA-FRLG";
@@ -83,7 +84,8 @@ const std::vector<Game>& fileGames() {
             } else if (dir.nds && n >= 0x80000 && n <= 0x80100) {
                 pw3d::SaveNDS s;
                 if (!s.load(data, err)) continue;
-                u8 ver = pw3d::ndsOriginVersion(s);
+                u8 ver = pw3d::versionFromFileName(fn);
+                if (ver < 7 || ver > 23) ver = pw3d::ndsOriginVersion(s);
                 const char* name = "?";
                 const char* region = "Sinnoh";
                 const char* kind = "NDS-Pt";

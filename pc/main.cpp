@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../core/bank.hpp"
+#include "../core/bytes.hpp"
 #include "../core/convert.hpp"
 #include "../core/gb.hpp"
 #include "../core/gba.hpp"
@@ -25,6 +26,7 @@
 #include "../core/save7.hpp"
 #include "../core/savefile.hpp"
 #include "../core/sync.hpp"
+#include "../core/world.hpp"
 
 using namespace pw3d;
 
@@ -594,6 +596,86 @@ static int cmdAbgleich(int argc, char** argv) {
     return 0;
 }
 
+// welt <speicher> <spielstände …>: alle Spielstände aktuell halten (wie die App). Schreibt geänderte
+// Spielstände zurück in ihre Dateien (nur an Kopien verwenden!).
+static int cmdWelt(int argc, char** argv) {
+    Bank bank;
+    bank.species = &g_species;
+    std::string err;
+    if (std::ifstream(argv[2]) && !bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    bank.species = &g_species;
+    std::vector<WorldSave> saves;
+    std::vector<std::string> paths;
+    for (int i = 3; i < argc; i++) {
+        std::string a = argv[i];
+        WorldSave w;
+        if (a.rfind("modul:", 0) == 0) { w.media = 2; a = a.substr(6); }
+        std::string p = splitLang(a, w.language);
+        if (!readFile(p, w.data)) { std::fprintf(stderr, "Kann %s nicht lesen\n", p.c_str()); return 1; }
+        std::string q = p;
+        for (auto& c : q) if (c == '\\') c = '/';
+        w.lowId = 0;
+        size_t t = q.find("/00040000/");
+        if (t != std::string::npos) w.lowId = uint32_t(std::strtoul(q.substr(t + 10, 8).c_str(), nullptr, 16));
+        else { uint32_t h = 2166136261u; for (unsigned char c : q.substr(q.find_last_of('/') + 1)) h = (h ^ c) * 16777619u; w.lowId = h | 0x80000000u; }
+        uint8_t fv = versionFromFileName(q.substr(q.find_last_of('/') + 1));
+        if (isNDSFile(p)) { SaveNDS g; if (!loadNDS(p, g)) return 1; w.gen = g.generation(); w.version = fv >= 7 ? fv : ndsOriginVersion(g); }
+        else if (isGBAFile(p)) { SaveGBA g; if (!loadGBA(p, g)) return 1; w.gen = 3; w.version = fv && fv <= 5 ? fv : gbaVersionOf(g); }
+        else if (isGBFile(p)) { SaveGB g; if (!loadGB(p, g)) return 1; w.gen = g.generation(); w.version = makeCtx(g, w.language, bank.trainer).version; }
+        else { auto sv = open(p, false); w.gen = sv ? sv->generation() : 7; }
+        w.label = q.substr(q.find_last_of('/') + 1) + (w.media == 2 ? " (Modul)" : "");
+        saves.push_back(std::move(w));
+        paths.push_back(p);
+    }
+    WorldReport rep;
+    worldSync(bank, saves, g_species, g_names, rep);
+    for (size_t i = 0; i < saves.size(); i++) {
+        if (!saves[i].changed) continue;
+        std::ofstream f(paths[i], std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(saves[i].data.data()), std::streamsize(saves[i].data.size()));
+        if (!f) { std::fprintf(stderr, "Kann %s nicht schreiben\n", paths[i].c_str()); return 1; }
+    }
+    if (!bank.save(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    for (auto& l : rep.lines) std::printf("%s\n", l.c_str());
+    std::printf("gespielt:");
+    for (auto& w : saves) if (w.played) std::printf(" %s", w.label.c_str());
+    std::printf("\n%d neu, %d verändert, %d freigelassen, %d Spielstände geschrieben, %d Pokémon im Speicher, Geld %u\n",
+                rep.added, rep.updated, rep.released, rep.written, bank.count(), unsigned(bank.money));
+    return 0;
+}
+
+// test-ep <spielstand> <teamplatz> <zusätzliche EP>: Training nachstellen (nur an Kopien).
+static int cmdTestEp(const char* path, int idx, int add) {
+    std::vector<uint8_t> data;
+    std::string err;
+    if (!readFile(path, data)) return 1;
+    if (isNDSFile(path)) {
+        SaveNDS s;
+        if (!s.load(data, err)) return 1;
+        auto team = s.party();
+        wr32(&team[size_t(idx)].d[0x10], team[size_t(idx)].exp() + uint32_t(add));
+        wr16(&team[size_t(idx)].d[6], team[size_t(idx)].calcChecksum());
+        s.setParty(team);
+        return writeNDS(path, s) ? 0 : 1;
+    }
+    if (isGBAFile(path)) {
+        SaveGBA s;
+        if (!s.load(data, err)) return 1;
+        auto team = s.party();
+        wr32(&team[size_t(idx)].d[0x24], team[size_t(idx)].exp() + uint32_t(add));
+        wr16(&team[size_t(idx)].d[0x1C], team[size_t(idx)].calcChecksum());
+        s.setParty(team);
+        return writeGBA(path, s) ? 0 : 1;
+    }
+    auto s = open(path, true);
+    if (!s) return 1;
+    PK6 pk = s->partySlot(idx);
+    wr32(pk.d.data() + 0x10, pk.exp() + uint32_t(add));
+    pk.updateChecksum();
+    s->setPartySlot(idx, pk);
+    return writeSave(path, *s) ? 0 : 1;
+}
+
 // ---------- Gen 1/2 ----------
 static void printGBMon(const char* label, const GBMon& m) {
     std::string moves;
@@ -635,7 +717,7 @@ static int cmdInfoNDS(const std::string& path) {
         uint8_t level = pk.party ? pk.partyLevel() : levelForExp(g_species.get(sp).growth, pk.exp());
         std::printf("  %-8s Nr. %3u %s  \"%s\"  OT \"%s\" %05u/%05u  Lv. %u  EP %u  PID %08X  Wesen %u  Form %u%s%s%s\n", lbl, sp,
                     g_names.species(sp).c_str(), pk.nickname().c_str(), pk.otName().c_str(), pk.tid(), pk.sid(), level,
-                    unsigned(pk.exp()), unsigned(pk.pid()), pk.nature(), pk.form(), pk.isEgg() ? "  Ei" : "",
+                    unsigned(pk.exp()), unsigned(pk.pid()), pk.nature(), pk.form(), pk.isEgg() ? "  Ei" : ((pk.tid() ^ pk.sid() ^ (pk.pid() >> 16) ^ (pk.pid() & 0xFFFF)) < 8 ? "  schillernd" : ""),
                     pk.isNicknamed() ? "  Spitzname" : "", pk.checksum() == pk.calcChecksum() ? "" : "  PRÜFSUMME FALSCH");
         std::printf("           Attacken:");
         for (uint16_t m : pk.moves())
@@ -658,7 +740,7 @@ static int cmdInfoNDS(const std::string& path) {
             if (!pk.species()) continue;
             char l[12];
             std::snprintf(l, sizeof l, "B%02d/%02d", b + 1, i + 1);
-            if (++n <= 40) line(l, pk);
+            if (++n <= (std::getenv("PW3D_ALLE") ? 100000 : 40)) line(l, pk);
         }
     if (n > 40) std::printf("  … insgesamt %d Pokémon in den Boxen\n", n);
     const char* names[] = {"Items", "Basis-Items", "TM/VM", "Briefe", "Medizin", "Beeren", "Bälle", "Kampf-Items"};
@@ -711,7 +793,7 @@ static int cmdInfoGBA(const std::string& path) {
         uint8_t level = pk.party ? pk.partyLevel() : levelForExp(g_species.get(sp).growth, pk.exp());
         std::printf("  %-8s Nr. %3u %s  \"%s\"  OT \"%s\" %05u/%05u  Lv. %u  EP %u  PID %08X%s%s\n", lbl, sp,
                     g_names.species(sp).c_str(), pk.nickname().c_str(), pk.otName().c_str(), pk.tid(), pk.sid(), level,
-                    unsigned(pk.exp()), unsigned(pk.pid()), pk.isEgg() ? "  Ei" : "",
+                    unsigned(pk.exp()), unsigned(pk.pid()), pk.isEgg() ? "  Ei" : ((pk.tid() ^ pk.sid() ^ (pk.pid() >> 16) ^ (pk.pid() & 0xFFFF)) < 8 ? "  schillernd" : ""),
                     pk.checksum() == pk.calcChecksum() ? "" : "  PRÜFSUMME FALSCH");
         std::printf("           Attacken:");
         for (uint16_t m : pk.moves())
@@ -816,6 +898,14 @@ int main(int argc, char** argv) {
     }
     if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
     if (cmd == "abgleich" && argc >= 4) return cmdAbgleich(argc, argv);
+    if (cmd == "welt" && argc >= 4) return cmdWelt(argc, argv);
+    if (cmd == "test-weg" && argc == 4) { // Test: Teammitglied entfernen (DS)
+        std::vector<uint8_t> d; std::string e; SaveNDS s;
+        if (!readFile(argv[2], d) || !s.load(d, e)) return 1;
+        auto t = s.party(); t.erase(t.begin() + std::atoi(argv[3])); s.setParty(t);
+        return writeNDS(argv[2], s) ? 0 : 1;
+    }
+    if (cmd == "test-ep" && argc == 5) return cmdTestEp(argv[2], std::atoi(argv[3]), std::atoi(argv[4]));
     if (cmd == "nds-rundlauf" && argc == 3) return cmdNdsRoundtrip(argv[2]);
     if (cmd == "item" && argc == 5) { // Test: Item in die passende reisende Tasche legen
         auto s = open(argv[2], true);
