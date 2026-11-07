@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "convert.hpp"
 #include "pk6.hpp"
 
 namespace pw3d {
@@ -30,6 +31,7 @@ public:
     virtual ~SaveFile() = default;
 
     virtual int generation() const = 0;
+    virtual GameKind kind() const = 0;
     virtual const char* gameTitle() const = 0;
     virtual uint16_t maxSpecies() const = 0;
 

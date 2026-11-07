@@ -1,0 +1,324 @@
+#include "bank.hpp"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <iterator>
+
+#include "bytes.hpp"
+
+namespace pw3d {
+
+namespace {
+
+bool sameMon(const PK6& a, const PK6& b) { return a.ec() == b.ec() && a.pid() == b.pid(); }
+
+bool present(const PK6& pk) { return pk.species() != 0 && pk.checksumValid(); }
+
+const BankEntry* findIn(const std::array<BankEntry, Bank::PARTY>& party, const std::vector<BankEntry>& boxes,
+                        const PK6& pk) {
+    for (auto& e : party)
+        if (e.used && sameMon(e.pk, pk)) return &e;
+    for (auto& e : boxes)
+        if (e.used && sameMon(e.pk, pk)) return &e;
+    return nullptr;
+}
+
+// Pokémon aus einem Spielstand in die Speicherform bringen; prev = bisheriger Eintrag.
+BankEntry importMon(const SaveFile& sav, const PK6& game, const BankEntry* prev) {
+    BankEntry e;
+    e.used = true;
+    if (sav.generation() == 6) {
+        e.pk = toGen7(game);
+        if (prev) restoreGen7Only(e.pk, prev->pk, game.d[0x2A]);
+        e.gen6 = game;
+        e.hasGen6 = true;
+    } else {
+        e.pk = game;
+        if (prev && prev->hasGen6) { e.gen6 = prev->gen6; e.hasGen6 = true; }
+    }
+    return e;
+}
+
+PK6 exportMon(const BankEntry& e, GameKind k) {
+    if (kindGeneration(k) == 7) return e.pk;
+    PK6 p = toGen6(e.pk);
+    if (e.hasGen6 && sameMon(e.gen6, e.pk)) restoreGen6Only(p, e.gen6);
+    return p;
+}
+
+void reownIfFrom(PK6& pk, const Trainer6& from, const Trainer6& to) {
+    if (pk.tid() == from.tid && pk.sid() == from.sid && pk.otName() == from.name) {
+        pk.setTid(to.tid);
+        pk.setSid(to.sid);
+        pk.setOtName(to.name);
+        pk.updateChecksum();
+    }
+}
+
+} // namespace
+
+BankEntry* Bank::find(const PK6& pk) {
+    return const_cast<BankEntry*>(findIn(party, boxes, pk));
+}
+
+BankEntry* Bank::freeBoxSlot(std::vector<BankEntry>& bx) {
+    for (auto& e : bx)
+        if (!e.used) return &e;
+    return nullptr;
+}
+
+int Bank::count() const {
+    int n = 0;
+    for (auto& e : party) n += e.used;
+    for (auto& e : boxes) n += e.used;
+    return n;
+}
+
+void Bank::create(const SaveFile& start, const std::vector<const SaveFile*>& others) {
+    trainer = start.trainer();
+    current = kindName(start.kind());
+    party = {};
+    boxes.assign(BOXES * SLOTS, BankEntry{});
+
+    for (int i = 0; i < start.partyCount() && i < PARTY; i++) {
+        PK6 pk = start.partySlot(i);
+        if (!present(pk)) continue;
+        party[i] = importMon(start, pk, nullptr);
+        party[i].inGame = true;
+    }
+    for (int b = 0; b < start.boxCount() && b < BOXES; b++)
+        for (int s = 0; s < SLOTS; s++) {
+            if (start.boxSlotEmpty(b, s)) continue;
+            auto& e = boxes[b * SLOTS + s];
+            e = importMon(start, start.boxSlot(b, s), nullptr);
+            e.inGame = true;
+        }
+
+    for (const SaveFile* o : others) {
+        Trainer6 ot = o->trainer();
+        auto add = [&](PK6 pk, bool fromParty, int box, int slot) {
+            if (!present(pk) || find(pk)) return;
+            reownIfFrom(pk, ot, trainer);
+            BankEntry e = importMon(*o, pk, nullptr);
+            e.inGame = false; // steht (noch) nicht im Startspiel
+            BankEntry* dst = nullptr;
+            if (fromParty) {
+                for (auto& p : party)
+                    if (!p.used) { dst = &p; break; }
+            } else if (box < BOXES && !boxes[box * SLOTS + slot].used) {
+                dst = &boxes[box * SLOTS + slot];
+            }
+            if (!dst) dst = freeBoxSlot(boxes);
+            if (dst) *dst = e;
+        };
+        for (int i = 0; i < o->partyCount() && i < PARTY; i++) add(o->partySlot(i), true, 0, 0);
+        for (int b = 0; b < o->boxCount(); b++)
+            for (int s = 0; s < SLOTS; s++)
+                if (!o->boxSlotEmpty(b, s)) add(o->boxSlot(b, s), false, b, s);
+    }
+}
+
+bool Bank::depart(const SaveFile& sav, std::string& err) {
+    if (current != kindName(sav.kind())) {
+        err = std::string("Der Speicher steht in ") + (current.empty() ? "keinem Spiel" : current) + ", nicht in " +
+              kindName(sav.kind());
+        return false;
+    }
+    std::array<BankEntry, PARTY> np{};
+    std::vector<BankEntry> nb(BOXES * SLOTS);
+
+    std::vector<BankEntry> team;
+    for (int i = 0; i < sav.partyCount() && i < PARTY; i++) {
+        PK6 pk = sav.partySlot(i);
+        if (!present(pk)) continue;
+        team.push_back(importMon(sav, pk, findIn(party, boxes, pk)));
+    }
+    // Nicht angezeigte Team-Pokémon an ihren alten Platz zurück (solange das Team nicht voll ist).
+    std::vector<const BankEntry*> overflow;
+    for (int i = 0; i < PARTY; i++) {
+        const auto& e = party[i];
+        if (!e.used || e.inGame) continue;
+        bool dup = false;
+        for (auto& t : team) dup |= sameMon(t.pk, e.pk);
+        if (dup) continue;
+        if (int(team.size()) < PARTY) team.insert(team.begin() + std::min<size_t>(size_t(i), team.size()), e);
+        else overflow.push_back(&e);
+    }
+    for (size_t i = 0; i < team.size(); i++) np[i] = team[i];
+    for (int b = 0; b < sav.boxCount() && b < BOXES; b++)
+        for (int s = 0; s < SLOTS; s++) {
+            if (sav.boxSlotEmpty(b, s)) continue;
+            PK6 pk = sav.boxSlot(b, s);
+            nb[b * SLOTS + s] = importMon(sav, pk, findIn(party, boxes, pk));
+        }
+
+    // Was das Spiel nicht angezeigt hat, bleibt erhalten.
+    auto keep = [&](const BankEntry& e, BankEntry* preferred) -> bool {
+        if (findIn(np, nb, e.pk)) return true; // schon da (z. B. Kopie)
+        BankEntry* dst = (preferred && !preferred->used) ? preferred : nullptr;
+        if (!dst) dst = freeBoxSlot(nb);
+        if (!dst) return false;
+        *dst = e;
+        return true;
+    };
+    for (const BankEntry* e : overflow)
+        if (!keep(*e, nullptr)) { err = "Kein Platz mehr für nicht angezeigte Pokémon"; return false; }
+    for (int i = 0; i < BOXES * SLOTS; i++) {
+        const auto& e = boxes[i];
+        if (!e.used || e.inGame) continue;
+        if (!keep(e, &nb[i])) { err = "Kein Platz mehr für nicht angezeigte Pokémon"; return false; }
+    }
+
+    for (auto& e : np) e.inGame = false;
+    for (auto& e : nb) e.inGame = false;
+    party = np;
+    boxes = nb;
+    current.clear();
+    return true;
+}
+
+bool Bank::arrive(SaveFile& sav, int& hidden, std::string& err) {
+    if (!current.empty()) {
+        err = "Erst aus " + current + " abreisen";
+        return false;
+    }
+    GameKind k = sav.kind();
+    hidden = 0;
+
+    // Leerer Platz, wie ihn das Spiel selbst verwendet.
+    PK6 blank;
+    bool haveBlank = false;
+    for (int b = 0; b < sav.boxCount() && !haveBlank; b++)
+        for (int s = 0; s < SLOTS && !haveBlank; s++)
+            if (sav.boxSlot(b, s).species() == 0 && sav.boxSlot(b, s).checksumValid()) {
+                blank = sav.boxSlot(b, s);
+                haveBlank = true;
+            }
+
+    std::vector<BankEntry*> visible;
+    for (auto& e : party)
+        if (e.used && fitsIn(e.pk, k)) visible.push_back(&e);
+    if (visible.empty()) {
+        err = "Kein Pokémon im Team kann in diesem Spiel existieren";
+        return false;
+    }
+
+    for (auto& e : party) e.inGame = false;
+    for (auto& e : boxes) e.inGame = false;
+
+    int n = 0;
+    for (BankEntry* e : visible) {
+        PK6 out = exportMon(*e, k);
+        sav.setPartySlot(n++, out);
+        sav.registerDex(out);
+        e->inGame = true;
+    }
+    for (int i = n; i < PARTY; i++) sav.setPartySlot(i, blank);
+    sav.setPartyCount(n);
+    for (auto& e : party)
+        if (e.used && !e.inGame) hidden++;
+
+    for (int b = 0; b < BOXES; b++)
+        for (int s = 0; s < SLOTS; s++) {
+            auto& e = boxes[b * SLOTS + s];
+            bool fits = e.used && b < sav.boxCount() && fitsIn(e.pk, k);
+            if (b < sav.boxCount()) {
+                if (fits) {
+                    PK6 out = exportMon(e, k);
+                    sav.setBoxSlot(b, s, out);
+                    sav.registerDex(out);
+                    e.inGame = true;
+                } else {
+                    sav.setBoxSlot(b, s, blank);
+                }
+            }
+            if (e.used && !fits) hidden++;
+        }
+
+    Trainer6 t = sav.trainer();
+    t.tid = trainer.tid;
+    t.sid = trainer.sid;
+    t.name = trainer.name;
+    t.gender = trainer.gender;
+    sav.setTrainer(t);
+    current = kindName(k);
+    return true;
+}
+
+// ---------- Datei ----------
+// "PW3DBANK", u32 Version 1, Trainer (TID, SID, Geschlecht, 3 frei, Name 26 Byte UTF-16),
+// aktuelles Spiel (16 Byte), dann 6 + 960 Einträge: Flags (1 belegt, 2 im Spiel, 4 Gen-6-Stand),
+// 3 frei, 0x104 Gen-7-Form, 0x104 Gen-6-Stand. Unverschlüsselt.
+
+namespace {
+constexpr char MAGIC[8] = {'P', 'W', '3', 'D', 'B', 'A', 'N', 'K'};
+constexpr size_t ENTRY = 4 + 2 * PK6_PARTY_SIZE;
+constexpr size_t HEADER = 8 + 4 + 8 + 26 + 16;
+} // namespace
+
+bool Bank::save(const std::string& path, std::string& err) const {
+    std::vector<uint8_t> out(HEADER + (PARTY + BOXES * SLOTS) * ENTRY, 0);
+    std::memcpy(out.data(), MAGIC, 8);
+    wr32(&out[8], 1);
+    wr16(&out[12], trainer.tid);
+    wr16(&out[14], trainer.sid);
+    out[16] = trainer.gender;
+    utf8ToUtf16(trainer.name, &out[20], 13);
+    std::memcpy(&out[46], current.c_str(), current.size() < 15 ? current.size() : 15);
+    size_t p = HEADER;
+    auto put = [&](const BankEntry& e) {
+        out[p] = uint8_t((e.used ? 1 : 0) | (e.inGame ? 2 : 0) | (e.hasGen6 ? 4 : 0));
+        if (e.used) {
+            std::memcpy(&out[p + 4], e.pk.d.data(), PK6_PARTY_SIZE);
+            if (e.hasGen6) std::memcpy(&out[p + 4 + PK6_PARTY_SIZE], e.gen6.d.data(), PK6_PARTY_SIZE);
+        }
+        p += ENTRY;
+    };
+    for (auto& e : party) put(e);
+    for (auto& e : boxes) put(e);
+
+    std::string tmp = path + ".neu";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()));
+        if (!f) { err = "Kann " + tmp + " nicht schreiben"; return false; }
+    }
+    std::remove(path.c_str());
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) { err = "Kann " + path + " nicht ersetzen"; return false; }
+    return true;
+}
+
+bool Bank::load(const std::string& path, std::string& err) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { err = "Kann " + path + " nicht lesen"; return false; }
+    std::vector<uint8_t> in((std::istreambuf_iterator<char>(f)), {});
+    if (in.size() != HEADER + (PARTY + BOXES * SLOTS) * ENTRY || std::memcmp(in.data(), MAGIC, 8) != 0 ||
+        rd32(&in[8]) != 1) {
+        err = path + " ist kein gemeinsamer Speicher (Version 1)";
+        return false;
+    }
+    trainer.tid = rd16(&in[12]);
+    trainer.sid = rd16(&in[14]);
+    trainer.gender = in[16];
+    trainer.name = utf16ToUtf8(&in[20], 13);
+    current.assign(reinterpret_cast<const char*>(&in[46]), strnlen(reinterpret_cast<const char*>(&in[46]), 16));
+    size_t p = HEADER;
+    auto get = [&](BankEntry& e) {
+        e = BankEntry{};
+        uint8_t fl = in[p];
+        e.used = fl & 1;
+        e.inGame = fl & 2;
+        e.hasGen6 = fl & 4;
+        std::memcpy(e.pk.d.data(), &in[p + 4], PK6_PARTY_SIZE);
+        std::memcpy(e.gen6.d.data(), &in[p + 4 + PK6_PARTY_SIZE], PK6_PARTY_SIZE);
+        p += ENTRY;
+    };
+    for (auto& e : party) get(e);
+    boxes.assign(BOXES * SLOTS, BankEntry{});
+    for (auto& e : boxes) get(e);
+    return true;
+}
+
+} // namespace pw3d

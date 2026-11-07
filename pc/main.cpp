@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "../core/bank.hpp"
 #include "../core/convert.hpp"
 #include "../core/memecrypto.hpp"
 #include "../core/save6.hpp"
@@ -26,7 +27,10 @@ static const char* USAGE =
     "  pw3d-reise kopiere <quelle> <teamplatz> <ziel> <box> <platz>\n"
     "  pw3d-reise insteam <quelle> <teamplatz> <ziel> [erwartete Art]\n"
     "  pw3d-reise geld <main> <betrag>        (Gen 7)\n"
-    "  pw3d-reise signieren <main> <ausgabe>  (Gen 7, Test)\n";
+    "  pw3d-reise signieren <main> <ausgabe>  (Gen 7, Test)\n"
+    "  pw3d-reise speicher-neu <speicher> <startspiel> [weitere …]\n"
+    "  pw3d-reise speicher-info <speicher>\n"
+    "  pw3d-reise reise <speicher> <von> <nach>\n";
 
 static bool readFile(const std::string& path, std::vector<uint8_t>& out) {
     std::ifstream f(path, std::ios::binary);
@@ -264,6 +268,75 @@ static int cmdSignieren(const char* path, const char* out) {
     return f ? 0 : 1;
 }
 
+// ---------- Gemeinsamer Speicher ----------
+
+static void printBank(const Bank& bank) {
+    std::printf("Gemeinsamer Speicher: Trainer \"%s\" %05u/%05u, %d Pokémon, aktuelles Spiel: %s\n",
+                bank.trainer.name.c_str(), bank.trainer.tid, bank.trainer.sid, bank.count(),
+                bank.current.empty() ? "keins" : bank.current.c_str());
+    auto line = [](const char* lbl, const BankEntry& e) {
+        printPk(lbl, e.pk);
+        std::printf("           %s%s  passt in: %s%s%s%s\n", e.inGame ? "im Spiel" : "nur im Speicher",
+                    e.hasGen6 ? ", Gen-6-Stand vorhanden" : "", fitsIn(e.pk, GameKind::XY) ? "XY " : "",
+                    fitsIn(e.pk, GameKind::ORAS) ? "ORAS " : "", fitsIn(e.pk, GameKind::SM) ? "SM " : "",
+                    fitsIn(e.pk, GameKind::USUM) ? "USUM" : "");
+    };
+    std::printf("Team:\n");
+    for (int i = 0; i < Bank::PARTY; i++)
+        if (bank.party[i].used) {
+            char lbl[16];
+            std::snprintf(lbl, sizeof lbl, "#%d", i + 1);
+            line(lbl, bank.party[i]);
+        }
+    std::printf("Boxen:\n");
+    for (int i = 0; i < Bank::BOXES * Bank::SLOTS; i++)
+        if (bank.boxes[i].used) {
+            char lbl[16];
+            std::snprintf(lbl, sizeof lbl, "B%02d/%02d", i / Bank::SLOTS + 1, i % Bank::SLOTS + 1);
+            line(lbl, bank.boxes[i]);
+        }
+}
+
+// speicher-neu <speicher> <startspiel> [weitere spielstände …]
+static int cmdSpeicherNeu(int argc, char** argv) {
+    auto start = open(argv[3], true);
+    if (!start) return 1;
+    std::vector<std::unique_ptr<SaveFile>> others;
+    std::vector<const SaveFile*> ptrs;
+    for (int i = 4; i < argc; i++) {
+        auto o = open(argv[i], true);
+        if (!o) return 1;
+        ptrs.push_back(o.get());
+        others.push_back(std::move(o));
+    }
+    Bank bank;
+    bank.create(*start, ptrs);
+    std::string err;
+    if (!bank.save(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    printBank(bank);
+    return 0;
+}
+
+// reise <speicher> <von> <nach>: Stand aus „von“ übernehmen und in „nach“ schreiben.
+static int cmdReise(const char* bankPath, const char* fromPath, const char* toPath) {
+    Bank bank;
+    std::string err;
+    if (!bank.load(bankPath, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    auto from = open(fromPath, true), to = open(toPath, true);
+    if (!from || !to) return 1;
+    if (!bank.depart(*from, err)) { std::fprintf(stderr, "Abreise: %s\n", err.c_str()); return 1; }
+    int hidden = 0;
+    if (!bank.arrive(*to, hidden, err)) { std::fprintf(stderr, "Ankunft: %s\n", err.c_str()); return 1; }
+    if (!writeSave(toPath, *to)) return 1;
+    if (!bank.save(bankPath, err)) {
+        std::fprintf(stderr, "ACHTUNG: Zielspiel geschrieben, aber Speicher nicht: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("Gereist von %s nach %s: %d Pokémon, davon %d dort nicht sichtbar\n", from->gameTitle(),
+                to->gameTitle(), bank.count(), hidden);
+    return 0;
+}
+
 int runSelftest();
 
 int main(int argc, char** argv) {
@@ -278,6 +351,15 @@ int main(int argc, char** argv) {
     if (cmd == "insteam" && (argc == 5 || argc == 6)) return cmdInsTeam(argv + 2, argc == 6 ? argv[5] : nullptr);
     if (cmd == "geld" && argc == 4) return cmdGeld(argv[2], argv[3]);
     if (cmd == "signieren" && argc == 4) return cmdSignieren(argv[2], argv[3]);
+    if (cmd == "speicher-neu" && argc >= 4) return cmdSpeicherNeu(argc, argv);
+    if (cmd == "speicher-info" && argc == 3) {
+        Bank bank;
+        std::string err;
+        if (!bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        printBank(bank);
+        return 0;
+    }
+    if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
     std::fputs(USAGE, stderr);
     return 1;
 }

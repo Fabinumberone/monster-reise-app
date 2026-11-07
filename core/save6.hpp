@@ -26,6 +26,7 @@ public:
 
     Game6 game() const { return game_; }
     int generation() const override { return 6; }
+    GameKind kind() const override { return game_ == Game6::XY ? GameKind::XY : GameKind::ORAS; }
     const char* gameTitle() const override;
     uint16_t maxSpecies() const override { return 721; }
 

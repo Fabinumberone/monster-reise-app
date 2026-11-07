@@ -27,6 +27,7 @@ public:
 
     Game7 game() const { return game_; }
     int generation() const override { return 7; }
+    GameKind kind() const override { return game_ == Game7::SM ? GameKind::SM : GameKind::USUM; }
     const char* gameTitle() const override;
     uint16_t maxSpecies() const override { return layout_.maxSpecies; }
 
