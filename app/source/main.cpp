@@ -111,8 +111,14 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Info, SaveMoves, Travel, Confirm, Busy, Done, Error };
-enum class View { Team, PC, Bag };
+enum class Screen { Menu, Info, SaveMoves, Release, Travel, Confirm, Busy, Done, Error };
+enum class View { Team, PC, Bag, List };
+
+// Liste: alle Pokémon nach Nationaldex-Nummer gruppiert (Positionen wie State::held).
+struct ListGroup {
+    u16 species = 0;
+    std::vector<int> pos;
+};
 
 struct State {
     Bank bank;   // gemeinsamer Speicher (wie gespeichert)
@@ -121,6 +127,9 @@ struct State {
     bool dirty = false;   // in der App umgeräumt, noch nicht ins Spiel übernommen
     int held = -1;        // aufgenommenes Pokémon: 0–5 Team, ab 6 Boxplatz (6 + Index)
     int teamCursor = 0;
+    std::vector<ListGroup> list;  // für die Liste, neu aufgebaut beim Öffnen und nach Änderungen
+    int listSel = 0, listScroll = 0;      // Arten
+    int listOpen = -1, entrySel = 0;      // geöffnete Art und gewähltes Pokémon darin
     std::string bankErr;
     std::vector<SaveSlot> installed;
     const SaveSlot* current = nullptr;  // hier ist man gerade (nullptr: neuer Speicher, noch in keinem Spiel)
@@ -280,6 +289,45 @@ bool slotVisibleHere(const State& st, int idx) {
 BankEntry& entryAt(State& st, int pos) { return pos < Bank::PARTY ? st.bank.party[size_t(pos)] : st.bank.boxes[size_t(pos - Bank::PARTY)]; }
 const BankEntry& entryAt(const State& st, int pos) { return pos < Bank::PARTY ? st.bank.party[size_t(pos)] : st.bank.boxes[size_t(pos - Bank::PARTY)]; }
 
+void buildList(State& st) {
+    st.list.clear();
+    auto add = [&](int pos) {
+        const BankEntry& e = entryAt(st, pos);
+        if (!e.used) return;
+        u16 sp = e.pk.isEgg() ? 0 : e.pk.species(); // Eier zuerst
+        for (auto& g : st.list)
+            if (g.species == sp) { g.pos.push_back(pos); return; }
+        st.list.push_back({sp, {pos}});
+    };
+    for (int i = 0; i < Bank::PARTY; i++) add(i);
+    for (int i = 0; i < Bank::BOXES * Bank::SLOTS; i++) add(Bank::PARTY + i);
+    std::sort(st.list.begin(), st.list.end(), [](const ListGroup& a, const ListGroup& b) { return a.species < b.species; });
+    st.listSel = std::min(st.listSel, std::max(0, int(st.list.size()) - 1));
+    if (st.listOpen >= int(st.list.size())) st.listOpen = -1;
+    if (st.listOpen >= 0) st.entrySel = std::min(st.entrySel, int(st.list[size_t(st.listOpen)].pos.size()) - 1);
+}
+
+std::string placeName(const State& st, int pos) {
+    if (pos < Bank::PARTY) return "Team " + std::to_string(pos + 1);
+    int idx = pos - Bank::PARTY;
+    std::string p = "Box " + std::to_string(idx / Bank::SLOTS + 1) + ", Platz " + std::to_string(idx % Bank::SLOTS + 1);
+    if (!slotVisibleHere(st, idx)) p += " (nur im Speicher)";
+    return p;
+}
+
+const char* gameOfVersion(u8 v) {
+    switch (v) {
+    case 1: return "Saphir"; case 2: return "Rubin"; case 3: return "Smaragd"; case 4: return "Feuerrot"; case 5: return "Blattgrün";
+    case 7: return "HeartGold"; case 8: return "SoulSilver"; case 10: return "Diamant"; case 11: return "Perl"; case 12: return "Platin";
+    case 15: return "Colosseum/XD"; case 20: return "Weiß"; case 21: return "Schwarz"; case 22: return "Weiß 2"; case 23: return "Schwarz 2";
+    case 24: return "X"; case 25: return "Y"; case 26: return "Alpha Saphir"; case 27: return "Omega Rubin";
+    case 30: return "Sonne"; case 31: return "Mond"; case 32: return "Ultrasonne"; case 33: return "Ultramond";
+    case 35: return "Rot"; case 36: return "Grün"; case 37: return "Blau"; case 38: return "Gelb";
+    case 39: return "Gold"; case 40: return "Silber"; case 41: return "Kristall";
+    default: return "?";
+    }
+}
+
 // Wo liegt das Item im aktuellen Spiel? nullptr = dort nicht sichtbar.
 const char* itemPlaceHere(const State& st, uint16_t item) {
     if (!st.current) return "";
@@ -411,6 +459,55 @@ void drawBag(const State& st) {
         text("▲▼ blättern", 392, 242 - 18, 0.38f, C_LIGHT, RIGHT);
 }
 
+constexpr int LIST_ROWS = 9;
+
+void drawList(const State& st) {
+    if (st.listOpen < 0) {
+        text("Liste nach Pokédex-Nummer", 8, 48, 0.5f, C_WHITE);
+        text(std::to_string(st.list.size()) + " Arten", 392, 50, 0.4f, C_LIGHT, RIGHT);
+        for (int r = 0; r < LIST_ROWS; r++) {
+            int i = st.listScroll + r;
+            if (i >= int(st.list.size())) break;
+            const ListGroup& g = st.list[size_t(i)];
+            const BankEntry& e = entryAt(st, g.pos[0]);
+            float y = 68 + r * 17;
+            rect(8, y, 384, 16, i == st.listSel ? C_SEL : (r % 2 ? C_BG2 : C_BG));
+            u32 c = i == st.listSel ? C_TEXT : C_WHITE;
+            char nr[8];
+            std::snprintf(nr, sizeof nr, "%03u", unsigned(g.species));
+            text(g.species ? nr : "Ei", 14, y + 1, 0.42f, c);
+            text(g.species ? g_names.species(g.species) : std::string("Eier"), 52, y + 1, 0.42f, c, LEFT, 200);
+            (void)e;
+            if (g.pos.size() > 1) text("× " + std::to_string(g.pos.size()), 386, y + 1, 0.42f, i == st.listSel ? C_TEXT : C_SEL, RIGHT);
+        }
+        text("A: öffnen   ▲▼ ◀▶ blättern", 392, 226, 0.38f, C_LIGHT, RIGHT);
+        return;
+    }
+    const ListGroup& g = st.list[size_t(st.listOpen)];
+    char nr[8];
+    std::snprintf(nr, sizeof nr, "%03u", unsigned(g.species));
+    text(std::string(g.species ? nr : "") + " " + (g.species ? g_names.species(g.species) : std::string("Eier")) + "  ×" +
+             std::to_string(g.pos.size()), 8, 48, 0.5f, C_WHITE, LEFT, 384);
+    int first = std::max(0, std::min(st.entrySel - 2, int(g.pos.size()) - 4));
+    for (int r = 0; r < 4 && first + r < int(g.pos.size()); r++) {
+        int i = first + r;
+        const BankEntry& e = entryAt(st, g.pos[size_t(i)]);
+        float y = 68 + r * 38;
+        bool sel = i == st.entrySel;
+        rect(8, y, 384, 36, sel ? C_CARD : C_BG2);
+        u32 c = sel ? C_TEXT : C_WHITE, m = sel ? C_MUTED : C_LIGHT;
+        drawIcon(e.pk, 10, y + 3, 1.0f, false);
+        std::string name = monName(e.pk);
+        if (e.pk.isShiny()) name += " ★";
+        text(name, 54, y + 2, 0.45f, c, LEFT, 150);
+        if (!e.pk.isEgg()) text("Lv. " + std::to_string(e.pk.partyLevel()), 210, y + 2, 0.42f, c);
+        text(std::string("aus ") + gameOfVersion(e.pk.version()), 386, y + 2, 0.4f, m, RIGHT, 120);
+        text(placeName(st, g.pos[size_t(i)]), 54, y + 19, 0.38f, m, LEFT, 220);
+        text("OT " + e.pk.otName(), 386, y + 19, 0.38f, m, RIGHT, 110);
+    }
+    text("A: entlassen   B: zurück", 392, 226, 0.38f, C_LIGHT, RIGHT);
+}
+
 void drawTop(const State& st) {
     drawHeader(st);
     if (st.loading) {
@@ -426,8 +523,9 @@ void drawTop(const State& st) {
     case View::Team: drawTeam(st); break;
     case View::PC: drawPC(st); break;
     case View::Bag: drawBag(st); break;
+    case View::List: drawList(st); break;
     }
-    if (st.held >= 0 && st.view != View::Bag) {
+    if (st.held >= 0 && (st.view == View::Team || st.view == View::PC)) {
         rect(0, 222, 400, 18, C_HEAD);
         text("Aufgenommen: " + monName(entryAt(st, st.held).pk) + "  –  A legt ab (tauscht), B bricht ab", 200, 223, 0.42f, C_WHITE, CENTER, 392);
     } else if (!g_icons.loaded() || !g_names.loaded())
@@ -445,7 +543,7 @@ void button(const Button& b, const std::string& label, u32 bg, u32 fg, float siz
     text(label, b.x + b.w / 2, b.y + b.h / 2 - size * 15, size, fg, CENTER, b.w - 8);
 }
 
-const Button B_TRAVEL{8, 34, 148, 66}, B_TEAM{164, 34, 148, 66}, B_PC{8, 108, 148, 66}, B_BAG{164, 108, 148, 66};
+const Button B_TRAVEL{8, 32, 304, 44}, B_TEAM{8, 82, 148, 42}, B_PC{164, 82, 148, 42}, B_BAG{8, 128, 148, 42}, B_LIST{164, 128, 148, 42};
 const Button B_EXIT{8, 196, 304, 36}, B_BACK{8, 200, 304, 32};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 
@@ -485,6 +583,7 @@ void drawBottom(const State& st) {
         button(B_TEAM, "Team", st.view == View::Team ? C_SEL : C_BG2, st.view == View::Team ? C_TEXT : C_WHITE, 0.7f);
         button(B_PC, "PC", st.view == View::PC ? C_SEL : C_BG2, st.view == View::PC ? C_TEXT : C_WHITE, 0.7f);
         button(B_BAG, "Beutel", st.view == View::Bag ? C_SEL : C_BG2, st.view == View::Bag ? C_TEXT : C_WHITE, 0.7f);
+        button(B_LIST, "Liste", st.view == View::List ? C_SEL : C_BG2, st.view == View::List ? C_TEXT : C_WHITE, 0.7f);
         text("X: Reisen  Y: Ansicht  L/R: Box  A: umräumen", 160, 178, 0.4f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
         button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.55f);
         break;
@@ -497,18 +596,31 @@ void drawBottom(const State& st) {
         break;
     }
     case Screen::SaveMoves:
-        text("Umgeräumt", 160, 4, 0.6f, C_WHITE, CENTER);
-        text("Du hast Pokémon umgeräumt.", 160, 50, 0.5f, C_WHITE, CENTER);
+        text("Änderungen", 160, 4, 0.6f, C_WHITE, CENTER);
+        text("Du hast Pokémon umgeräumt oder entlassen.", 160, 50, 0.5f, C_WHITE, CENTER);
         if (st.current) {
             text("In " + st.current->label() + " übernehmen?", 160, 74, 0.5f, C_WHITE, CENTER, 300);
             text("Der Spielstand wird dafür neu geschrieben (mit Sicherung).", 160, 100, 0.4f, C_LIGHT, CENTER, 300);
         } else {
             text("Im Speicher sichern?", 160, 74, 0.5f, C_WHITE, CENTER);
         }
-        text("Beim Verwerfen bleibt alles wie vor dem Umräumen.", 160, 140, 0.4f, C_LIGHT, CENTER, 300);
+        text("Beim Verwerfen bleibt alles wie vorher.", 160, 140, 0.4f, C_LIGHT, CENTER, 300);
         button(B_YES, "Übernehmen (A)", C_OK, C_WHITE, 0.5f);
         button(B_NO, "Verwerfen (B)", C_BG2, C_WHITE, 0.5f);
         break;
+    case Screen::Release: {
+        text("Entlassen", 160, 4, 0.6f, C_WHITE, CENTER);
+        const BankEntry& e = entryAt(st, st.list[size_t(st.listOpen)].pos[size_t(st.entrySel)]);
+        drawIcon(e.pk, 140, 36, 1.0f, false);
+        text(monName(e.pk) + (e.pk.isEgg() ? "" : "  Lv. " + std::to_string(e.pk.partyLevel())), 160, 72, 0.55f, C_WHITE, CENTER, 300);
+        text("wirklich entlassen?", 160, 94, 0.5f, C_WHITE, CENTER);
+        text("Es verschwindet aus dem Speicher und bei der nächsten", 160, 120, 0.4f, C_LIGHT, CENTER, 300);
+        text("Ankunft aus jedem Spiel. Alte Kopien kommen nicht zurück.", 160, 136, 0.4f, C_LIGHT, CENTER, 300);
+        text("Rückgängig nur über die Sicherungen.", 160, 156, 0.4f, C_SEL, CENTER, 300);
+        button(B_YES, "Entlassen (A)", C_ERR, C_WHITE, 0.5f);
+        button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.5f);
+        break;
+    }
     case Screen::Travel: {
         text("Wohin möchtest du reisen?", 160, 4, 0.55f, C_WHITE, CENTER);
         for (int r = 0; r < NREG; r++) {
@@ -740,6 +852,63 @@ void pickOrDrop(State& st) {
     st.held = -1;
 }
 
+void openList(State& st) {
+    st.held = -1;
+    st.view = View::List;
+    buildList(st);
+}
+
+// Pokémon entlassen: Kennung bleibt als „gesehen“ im Speicher, damit es nicht zurückkommt.
+void release(State& st) {
+    int pos = st.list[size_t(st.listOpen)].pos[size_t(st.entrySel)];
+    if (pos < Bank::PARTY) {
+        int team = 0;
+        for (auto& e : st.bank.party) team += e.used;
+        if (team <= 1) {
+            st.message = "Entlassen nicht möglich\nDas ist das letzte Pokémon im Team.";
+            st.screen = Screen::Error;
+            return;
+        }
+    }
+    u16 sp = st.list[size_t(st.listOpen)].species;
+    st.bank.remember();
+    entryAt(st, pos) = BankEntry{};
+    st.dirty = true;
+    buildList(st);
+    st.listOpen = -1; // Gruppe kann weggefallen sein: neu suchen
+    for (size_t i = 0; i < st.list.size(); i++)
+        if (st.list[i].species == sp) { st.listOpen = int(i); st.listSel = int(i); }
+    if (st.listOpen >= 0) st.entrySel = std::min(st.entrySel, int(st.list[size_t(st.listOpen)].pos.size()) - 1);
+    st.screen = Screen::Menu;
+}
+
+void listInput(State& st, u32 down) {
+    if (st.list.empty()) return;
+    if (st.listOpen < 0) {
+        int n = int(st.list.size());
+        if (down & KEY_DDOWN) st.listSel = std::min(n - 1, st.listSel + 1);
+        if (down & KEY_DUP) st.listSel = std::max(0, st.listSel - 1);
+        if (down & KEY_DRIGHT) st.listSel = std::min(n - 1, st.listSel + LIST_ROWS);
+        if (down & KEY_DLEFT) st.listSel = std::max(0, st.listSel - LIST_ROWS);
+        if (st.listSel < st.listScroll) st.listScroll = st.listSel;
+        if (st.listSel >= st.listScroll + LIST_ROWS) st.listScroll = st.listSel - LIST_ROWS + 1;
+        if (down & KEY_A) { st.listOpen = st.listSel; st.entrySel = 0; }
+        return;
+    }
+    int n = int(st.list[size_t(st.listOpen)].pos.size());
+    if (down & KEY_DDOWN) st.entrySel = std::min(n - 1, st.entrySel + 1);
+    if (down & KEY_DUP) st.entrySel = std::max(0, st.entrySel - 1);
+    if (down & KEY_B) st.listOpen = -1;
+    else if (down & KEY_A) {
+        if (st.current && !st.synced) {
+            st.message = "Entlassen nicht möglich\nDer Spielstand von " + st.current->label() + "\nkonnte beim Start nicht übernommen werden.";
+            st.screen = Screen::Error;
+        } else {
+            st.screen = Screen::Release;
+        }
+    }
+}
+
 void input(State& st, u32 down, const touchPosition& t) {
     bool touch = down & KEY_TOUCH;
     if (down & KEY_START) {
@@ -768,7 +937,10 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (down & KEY_DDOWN) st.bagScroll = std::min(maxScroll, st.bagScroll + 1);
             if (down & KEY_DUP) st.bagScroll = std::max(0, st.bagScroll - 1);
         }
-        if (down & KEY_Y) st.view = st.view == View::Team ? View::PC : st.view == View::PC ? View::Bag : View::Team;
+        if (down & KEY_Y) {
+            if (st.view == View::Bag) openList(st);
+            else st.view = st.view == View::Team ? View::PC : st.view == View::PC ? View::Bag : View::Team;
+        }
     }
 
     switch (st.screen) {
@@ -789,13 +961,19 @@ void input(State& st, u32 down, const touchPosition& t) {
             st.quit = true;
         }
         break;
+    case Screen::Release:
+        if ((touch && B_YES.hit(t)) || (down & KEY_A)) release(st);
+        else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
+        break;
     case Screen::Menu:
-        if (st.view != View::Bag && (down & KEY_A)) pickOrDrop(st);
+        if (st.view == View::List && (down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT))) listInput(st, down);
+        else if (st.view != View::Bag && st.view != View::List && (down & KEY_A)) pickOrDrop(st);
         else if (down & KEY_B) st.held = -1;
         else if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) { st.held = -1; startTravel(st); }
         else if (touch && B_TEAM.hit(t)) st.view = View::Team;
         else if (touch && B_PC.hit(t)) st.view = View::PC;
         else if (touch && B_BAG.hit(t)) st.view = View::Bag;
+        else if (touch && B_LIST.hit(t)) openList(st);
         else if (touch && B_EXIT.hit(t)) requestQuit(st);
         break;
     case Screen::Travel:

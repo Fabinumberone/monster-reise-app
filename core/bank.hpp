@@ -128,6 +128,9 @@ public:
     // enthält ihn bereits, dazu Umräumen in der App).
     void leave();
 
+    // Alle Pokémon im Speicher als gesehen merken (vor dem Entlassen, damit es nicht zurückkommt).
+    void remember();
+
     int count() const;
 
     std::vector<uint8_t> serialize() const;
@@ -138,7 +141,6 @@ private:
     BankEntry* find(const PK6& pk);
     bool ownTrainer(uint16_t tid, uint16_t sid, const std::string& name, bool gb) const;
     uint16_t familyOf(uint16_t s) const { return species ? species->family(s) : s; }
-    void remember(); // alle Pokémon im Speicher als gesehen merken
     BankEntry* freeBoxSlot(std::vector<BankEntry>& bx);
 };
 
