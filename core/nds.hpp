@@ -97,6 +97,9 @@ public:
     void setPouch(Pouch p, const std::vector<NDSItem>& items);
     void setMoney(uint32_t v);
     void setTrainer(const std::string& name, uint16_t tid, uint16_t sid, uint8_t gender);
+    // Pokédex: gefangen, gesehen (Geschlecht, Gen 5 auch Schillern), Sprache (nach PKHeX Zukan4/Zukan5).
+    void registerDex(const PK45& pk);
+    int dexCaughtCount() const;
     void finalize();
 
 private:

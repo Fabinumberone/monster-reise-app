@@ -709,7 +709,8 @@ static int cmdInfoNDS(const std::string& path) {
     std::string err;
     SaveNDS s;
     if (!readFile(path, data) || !s.load(std::move(data), err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
-    std::printf("Spiel: %s (Gen %d), Prüfsummen %s\n", ndsGameName(s.game()), s.generation(), s.checksumsValid() ? "ok" : "FALSCH");
+    std::printf("Spiel: %s (Gen %d), Prüfsummen %s, Pokédex gefangen %d\n", ndsGameName(s.game()), s.generation(),
+                s.checksumsValid() ? "ok" : "FALSCH", s.dexCaughtCount());
     std::printf("Trainer: \"%s\"  TID %05u  SID %05u  Geschlecht %u  Sprache %u  Geld %u\n", s.trainerName().c_str(), s.tid(),
                 s.sid(), s.trainerGender(), s.language(), unsigned(s.money()));
     auto line = [&](const char* lbl, const PK45& pk) {

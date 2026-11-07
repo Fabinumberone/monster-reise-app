@@ -309,6 +309,59 @@ void SaveNDS::setTrainer(const std::string& name, uint16_t tid, uint16_t sid, ui
     else data_[0x19400 + 0x21] = gender & 1;
 }
 
+void SaveNDS::registerDex(const PK45& pk) {
+    uint16_t sp = pk.species();
+    if (pk.isEgg() || sp == 0) return;
+    auto setBit = [&](uint32_t ofs, int bit) { data_[ofs + uint32_t(bit >> 3)] |= uint8_t(1 << (bit & 7)); };
+    auto getBit = [&](uint32_t ofs, int bit) { return (data_[ofs + uint32_t(bit >> 3)] >> (bit & 7)) & 1; };
+    uint8_t gender = pk.gender() == 1 ? 1 : 0;
+    int b = sp - 1;
+    if (generation() == 4) {
+        if (sp > 493) return;
+        uint32_t dex = general_ + (game_ == NDSGame::DP ? 0x12DC : game_ == NDSGame::Pt ? 0x1328 : 0x12B8);
+        const uint32_t R = 0x40;
+        bool seen = getBit(dex + 4 + R, b);
+        setBit(dex + 4, b);     // gefangen
+        if (!seen) {            // zuerst gesehenes Geschlecht in beiden Bereichen
+            if (gender) { setBit(dex + 4 + 2 * R, b); setBit(dex + 4 + 3 * R, b); }
+        } else if (getBit(dex + 4 + 2 * R, b) == getBit(dex + 4 + 3 * R, b) && gender) {
+            setBit(dex + 4 + 3 * R, b); // zweites Geschlecht
+        }
+        setBit(dex + 4 + R, b); // gesehen
+        if (game_ != NDSGame::DP) { // Sprachbits (DP nutzen eine eigene Artenliste, hier ausgelassen)
+            int l = pk.language() - 1;
+            int lang = l == 3 ? 4 : l == 4 ? 3 : l > 5 ? 0 : l < 0 ? 1 : l;
+            uint32_t ofs = dex + 0x108 + (game_ == NDSGame::HGSS ? 0x3C : 0x20) + sp;
+            data_[ofs] |= uint8_t(1 << (lang & 7));
+        }
+        return;
+    }
+    if (sp > 649) return;
+    bool bw = game_ == NDSGame::BW;
+    uint32_t dex = bw ? 0x21600 : 0x21400;
+    const uint32_t S = 0x54;
+    bool shiny = (pk.tid() ^ pk.sid() ^ (pk.pid() >> 16) ^ (pk.pid() & 0xFFFF)) < 8;
+    int region = (shiny ? 2 : 0) | gender;
+    setBit(dex + 0x8, b);                                     // gefangen
+    setBit(dex + 0x5C + uint32_t(region) * S, b);             // gesehen
+    bool shown = false;
+    for (int i = 0; i < 4; i++) shown |= getBit(dex + 0x1AC + uint32_t(i) * S, b);
+    if (!shown) setBit(dex + 0x1AC + uint32_t(region) * S, b); // angezeigt
+    if (sp <= 493) {
+        int l = pk.language() - 1;
+        if (l > 5) l--;
+        if (l >= 0 && l <= 5) setBit(dex + (bw ? 0x320 : 0x328), b * 7 + l);
+    }
+}
+
+int SaveNDS::dexCaughtCount() const {
+    uint32_t ofs = generation() == 4 ? general_ + (game_ == NDSGame::DP ? 0x12DC : game_ == NDSGame::Pt ? 0x1328 : 0x12B8) + 4
+                                     : (game_ == NDSGame::BW ? 0x21600 : 0x21400) + 0x8;
+    int n = 0, max = generation() == 4 ? 493 : 649;
+    for (int b = 0; b < max; b++) n += (data_[ofs + uint32_t(b >> 3)] >> (b & 7)) & 1;
+    return n;
+}
+
 void SaveNDS::finalize() {
     if (generation() == 4) {
         for (auto [ofs, size] : {std::pair<uint32_t, uint32_t>{general_, generalSize_}, {storage_, storageSize_}})
@@ -325,6 +378,7 @@ void SaveNDS::finalize() {
     blocks.push_back({0x18E00, 0x534, 26});
     blocks.push_back({0x19400, bw ? 0x68u : 0xB0u, 27});
     blocks.push_back({bw ? 0x21200u : 0x21100u, bw ? 0xECu : 0xF0u, 52});
+    blocks.push_back({bw ? 0x21600u : 0x21400u, bw ? 0x4D4u : 0x4DCu, bw ? 55 : 54}); // Pokédex
     for (const B& b : blocks) {
         uint16_t c = crc16Ccitt(&data_[b.ofs], b.len);
         wr16(&data_[b.ofs + b.len + 2], c);

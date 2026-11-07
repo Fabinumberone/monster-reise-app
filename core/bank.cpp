@@ -1086,6 +1086,7 @@ bool Bank::arriveNDS(SaveNDS& sav, const NDSContext& ctxIn, int& hidden, std::st
         e.nds = m;
         e.hasNds = true;
         e.inGame = true;
+        sav.registerDex(m);
         return m;
     };
     std::vector<PK45> team;
@@ -2270,6 +2271,7 @@ struct WorldImpl {
             if (v.team.empty()) { rep.lines.push_back(w.label + ": kein passendes Pokémon – nicht geschrieben"); return false; }
             auto exportN = [&](BankEntry& en) {
                 PK45 m = pk7ToGen45(en.pk, en.hasNds ? &en.nds : nullptr, ctx);
+                s.registerDex(m);
                 return m;
             };
             std::vector<PK45> team;

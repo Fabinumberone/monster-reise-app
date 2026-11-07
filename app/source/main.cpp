@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <map>
 #include <cstdio>
 #include <ctime>
 #include <memory>
@@ -120,7 +121,7 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Info, SaveMoves, Release, Travel, Confirm, Busy, Done, Error };
+enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error };
 enum class View { Team, PC, Bag, List };
 
 // Liste: alle Pokémon nach Nationaldex-Nummer gruppiert (Positionen wie State::held).
@@ -559,7 +560,7 @@ void drawList(const State& st) {
             (void)e;
             if (g.pos.size() > 1) text("× " + std::to_string(g.pos.size()), 386, y + 1, 0.42f, i == st.listSel ? C_TEXT : C_SEL, RIGHT);
         }
-        text("A: öffnen   ▲▼ ◀▶ blättern", 392, 226, 0.38f, C_LIGHT, RIGHT);
+        text("A: öffnen   ▲▼ ◀▶ blättern   SELECT: Doppelte entlassen", 392, 226, 0.36f, C_LIGHT, RIGHT, 384);
         return;
     }
     const ListGroup& g = st.list[size_t(st.listOpen)];
@@ -610,6 +611,8 @@ void drawTop(const State& st) {
     } else if (!g_icons.loaded() || !g_names.loaded())
         text(std::string(!g_icons.loaded() ? "icons.bin" : "namen.txt") + " fehlt auf der SD", 392, 226, 0.36f, C_ERR, RIGHT);
 }
+
+std::vector<int> duplicates(const State& st);
 
 // ---------- Unterer Bildschirm ----------
 struct Button {
@@ -698,6 +701,22 @@ void drawBottom(const State& st) {
         button(B_YES, "Übernehmen (A)", C_OK, C_WHITE, 0.5f);
         button(B_NO, "Verwerfen (B)", C_BG2, C_WHITE, 0.5f);
         break;
+    case Screen::Dupes: {
+        text("Doppelte entlassen", 160, 4, 0.6f, C_WHITE, CENTER);
+        size_t n = duplicates(st).size();
+        if (!n) {
+            text("Keine doppelten Pokémon.", 160, 80, 0.5f, C_WHITE, CENTER);
+        } else {
+            text(std::to_string(n) + " Pokémon entlassen?", 160, 50, 0.55f, C_WHITE, CENTER);
+            text("Je Art (und Form) bleibt das mit dem höchsten Level.", 160, 80, 0.4f, C_LIGHT, CENTER, 300);
+            text("Teammitglieder und schillernde Pokémon bleiben immer.", 160, 98, 0.4f, C_LIGHT, CENTER, 300);
+            text("Sie verschwinden aus allen Spielen und kommen nicht zurück.", 160, 124, 0.4f, C_LIGHT, CENTER, 300);
+            text("Rückgängig nur über die Sicherungen.", 160, 150, 0.4f, C_SEL, CENTER, 300);
+        }
+        button(B_YES, n ? "Entlassen (A)" : "OK (A)", n ? C_ERR : C_BG2, C_WHITE, 0.5f);
+        button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.5f);
+        break;
+    }
     case Screen::Release: {
         text("Entlassen", 160, 4, 0.6f, C_WHITE, CENTER);
         const BankEntry& e = entryAt(st, st.list[size_t(st.listOpen)].pos[size_t(st.entrySel)]);
@@ -884,6 +903,46 @@ void release(State& st) {
     st.screen = Screen::Menu;
 }
 
+// Doppelte: je Art und Form bleibt das Pokémon mit dem höchsten Level (bei Gleichstand das ältere);
+// Teammitglieder, schillernde Pokémon und Eier werden nie entlassen (Wunsch des Nutzers + Vorsicht).
+std::vector<int> duplicates(const State& st) {
+    std::map<uint32_t, int> best; // Art·256 + Form -> Position
+    auto key = [](const PK6& pk) { return uint32_t(pk.species()) << 8 | pk.form(); };
+    auto better = [&](int a, int b) {
+        const PK6 &x = entryAt(st, a).pk, &y = entryAt(st, b).pk;
+        int lx = levelOf(x), ly = levelOf(y);
+        if (lx != ly) return lx > ly;
+        if (x.exp() != y.exp()) return x.exp() > y.exp();
+        return entryAt(st, a).uid < entryAt(st, b).uid;
+    };
+    const int total = Bank::PARTY + Bank::BOXES * Bank::SLOTS;
+    for (int p = 0; p < total; p++) {
+        const BankEntry& e = entryAt(st, p);
+        if (!e.used || e.pk.isEgg()) continue;
+        auto it = best.find(key(e.pk));
+        if (it == best.end() || better(p, it->second)) best[key(e.pk)] = p;
+    }
+    std::vector<int> out;
+    for (int p = Bank::PARTY; p < total; p++) { // nur Boxen
+        const BankEntry& e = entryAt(st, p);
+        if (!e.used || e.pk.isEgg() || e.pk.isShiny()) continue;
+        if (best[key(e.pk)] != p) out.push_back(p);
+    }
+    return out;
+}
+
+void releaseDuplicates(State& st) {
+    std::vector<int> d = duplicates(st);
+    if (d.empty()) { st.screen = Screen::Menu; return; }
+    st.bank.remember();
+    for (int p : d) entryAt(st, p) = BankEntry{};
+    st.dirty = true;
+    st.listOpen = -1;
+    buildList(st);
+    st.notice = {std::to_string(d.size()) + " doppelte Pokémon entlassen.", "Beim Spielen oder Beenden werden alle Spielstände aktualisiert."};
+    st.screen = Screen::Info;
+}
+
 void listInput(State& st, u32 down) {
     if (st.list.empty()) return;
     if (st.listOpen < 0) {
@@ -955,12 +1014,17 @@ void input(State& st, u32 down, const touchPosition& t) {
             st.quit = true;
         }
         break;
+    case Screen::Dupes:
+        if ((touch && B_YES.hit(t)) || (down & KEY_A)) releaseDuplicates(st);
+        else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
+        break;
     case Screen::Release:
         if ((touch && B_YES.hit(t)) || (down & KEY_A)) release(st);
         else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
         break;
     case Screen::Menu:
-        if (st.view == View::List && (down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT))) listInput(st, down);
+        if (st.view == View::List && (down & KEY_SELECT)) st.screen = Screen::Dupes;
+        else if (st.view == View::List && (down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT))) listInput(st, down);
         else if (st.view != View::Bag && st.view != View::List && (down & KEY_A)) pickOrDrop(st);
         else if (down & KEY_B) st.held = -1;
         else if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) { st.held = -1; startTravel(st); }
