@@ -18,6 +18,7 @@ struct Layout7 {
     uint32_t boxCount;
     uint32_t money;
     uint32_t dex;
+    uint16_t maxSpecies; // SM 802, USUM 807
 };
 
 class Save7 : public SaveFile {
@@ -27,7 +28,7 @@ public:
     Game7 game() const { return game_; }
     int generation() const override { return 7; }
     const char* gameTitle() const override;
-    uint16_t maxSpecies() const override { return 807; }
+    uint16_t maxSpecies() const override { return layout_.maxSpecies; }
 
     bool valid() const override; // Prüfsummen und Signatur
     bool checksumsValid() const;

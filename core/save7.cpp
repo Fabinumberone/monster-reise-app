@@ -12,8 +12,9 @@ constexpr uint32_t BEEF = 0x42454546;
 constexpr uint16_t SIGNATURE_BLOCK_ID = 0x24;
 constexpr uint32_t SIGNATURE_OFS = 0x100, SIGNATURE_LEN = 0x80;
 
-// USUM an Ultramond bestätigt. SM noch offen (Sonne-Spielstand noch nicht untersucht).
-constexpr Layout7 LAYOUT_USUM{0x6CC00, 0x1400, 0x1600, 0x5200, 32, 0x4404, 0x2C00};
+// Blockpositionen nach PKHeX SaveBlockAccessor7SM/USUM. USUM an Ultramond bestätigt.
+constexpr Layout7 LAYOUT_USUM{0x6CC00, 0x1400, 0x1600, 0x5200, 32, 0x4404, 0x2C00, 807};
+constexpr Layout7 LAYOUT_SM{0x6BE00, 0x1200, 0x1400, 0x4E00, 32, 0x4004, 0x2A00, 802};
 
 // Pokédex (relativ zum Dex-Block, nach PKHeX Zukan7, an Ultramond bestätigt).
 constexpr uint32_t DEX_CAUGHT = 0x88;
@@ -44,7 +45,7 @@ const char* Save7::gameTitle() const {
 bool Save7::load(std::vector<uint8_t> data, std::string& err) {
     data_ = std::move(data);
     if (data_.size() == LAYOUT_USUM.size) { game_ = Game7::USUM; layout_ = LAYOUT_USUM; }
-    else if (data_.size() == 0x6BE00) { err = "Sonne/Mond wird noch nicht unterstützt"; return false; }
+    else if (data_.size() == LAYOUT_SM.size) { game_ = Game7::SM; layout_ = LAYOUT_SM; }
     else { err = "Unbekannte Größe " + std::to_string(data_.size()) + " Byte"; return false; }
 
     uint32_t magicAt = 0;
