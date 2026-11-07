@@ -11,6 +11,7 @@
 #include "../core/bank.hpp"
 #include "../core/convert.hpp"
 #include "../core/items.hpp"
+#include "../core/names.hpp"
 #include "../core/memecrypto.hpp"
 #include "../core/save6.hpp"
 #include "../core/save7.hpp"
@@ -79,12 +80,17 @@ static bool writeSave(const std::string& path, SaveFile& sav) {
     return true;
 }
 
+static Names g_names; // namen.txt von der Azahar-SD, falls vorhanden
+
 static void printPk(const char* label, const PK6& pk) {
     auto m = pk.moves();
-    std::printf("  %-8s Nr. %3u Form %u  \"%s\"  OT \"%s\" %05u/%05u  EP %u  Attacken %u %u %u %u%s%s\n", label,
-                pk.species(), pk.form(), pk.nickname().c_str(), pk.otName().c_str(), pk.tid(), pk.sid(),
-                unsigned(pk.exp()), m[0], m[1], m[2], m[3], pk.isEgg() ? "  [Ei]" : "",
-                pk.checksumValid() ? "" : "  [PRÜFSUMME FALSCH]");
+    std::string moves;
+    for (uint16_t a : m)
+        if (a) moves += (moves.empty() ? "" : ", ") + g_names.move(a);
+    std::printf("  %-8s Nr. %3u %s Form %u  \"%s\"  OT \"%s\" %05u/%05u  EP %u  Attacken: %s%s%s\n", label,
+                pk.species(), g_names.species(pk.species()).c_str(), pk.form(), pk.nickname().c_str(),
+                pk.otName().c_str(), pk.tid(), pk.sid(), unsigned(pk.exp()), moves.c_str(),
+                pk.isEgg() ? "  [Ei]" : "", pk.checksumValid() ? "" : "  [PRÜFSUMME FALSCH]");
     std::printf("           Spiel %u  Sprache %u  Geschlecht %u%s\n", pk.version(), pk.language(), pk.gender(),
                 pk.isShiny() ? "  schillernd" : "");
 }
@@ -283,7 +289,7 @@ static void printBank(const Bank& bank) {
     else std::printf("Geld: noch nicht übernommen (wird bei der nächsten Abreise gelesen)\n");
     std::printf("Items:");
     for (const BankItem& b : bank.items) {
-        std::printf(" %u×%u", b.item, unsigned(b.count));
+        std::printf(" %s×%u", g_names.item(b.item).c_str(), unsigned(b.count));
         if (b.written < b.count) std::printf("(%u sichtbar)", b.written);
     }
     std::printf("\n");
@@ -353,6 +359,8 @@ static int cmdReise(const char* bankPath, const char* fromPath, const char* toPa
 int runSelftest();
 
 int main(int argc, char** argv) {
+    if (const char* appdata = std::getenv("APPDATA"))
+        g_names.load(std::string(appdata) + "\\Azahar\\sdmc\\pokemon-world-3d\\namen.txt");
     std::string cmd = argc > 1 ? argv[1] : "";
     if (cmd == "selbsttest" && argc == 2) return runSelftest();
     if (cmd == "info" && argc == 3) { auto s = open(argv[2], false); return s ? cmdInfo(*s, false) : 1; }

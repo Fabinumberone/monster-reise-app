@@ -15,6 +15,7 @@
 #include "bank.hpp"
 #include "games.hpp"
 #include "items.hpp"
+#include "names.hpp"
 #include "savefile.hpp"
 
 using namespace pw3d;
@@ -26,7 +27,10 @@ const char* BANK = "sdmc:/pokemon-world-3d/speicher.bin";
 const char* LAST = "sdmc:/pokemon-world-3d/zuletzt.txt";
 const char* BACKUPS = "sdmc:/pokemon-world-3d/sicherungen";
 
+const char* NAMES = "sdmc:/pokemon-world-3d/namen.txt";
+
 PrintConsole topCon, botCon;
+Names g_names;
 
 // ---------- Text: UTF-8 -> Zeichensatz der Konsole (CP437) ----------
 std::string cp437(const std::string& s) {
@@ -108,6 +112,7 @@ void writeLast(u32 lowId) {
 }
 
 void loadState(State& st) {
+    g_names.load(NAMES);
     st.installed.clear();
     for (auto& g : allGames())
         if (hasSave(g)) st.installed.push_back(&g);
@@ -122,13 +127,45 @@ void loadState(State& st) {
 }
 
 // ---------- Ansichten (oberer Bildschirm) ----------
+// Mit Leerzeichen auf width Zeichen auffüllen (Zeichen, nicht UTF-8-Bytes).
+std::string pad(const std::string& s, size_t width) {
+    size_t chars = 0;
+    for (unsigned char c : s) chars += (c & 0xC0) != 0x80;
+    return chars >= width ? s : s + std::string(width - chars, ' ');
+}
+
+// Auf höchstens width Zeichen kürzen.
+std::string cut(const std::string& s, size_t width) {
+    size_t chars = 0;
+    for (size_t i = 0; i < s.size(); i++) {
+        if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80 && chars++ == width) return s.substr(0, i);
+    }
+    return s;
+}
+
+std::string monName(const PK6& pk) {
+    if (pk.isEgg()) return "Ei";
+    std::string art = g_names.species(pk.species());
+    std::string nick = pk.nickname();
+    if (pk.isNicknamed() && !nick.empty() && nick != art) return nick + " (" + art + ")";
+    return art;
+}
+
 std::string monLine(const BankEntry& e, GameKind here) {
     const PK6& pk = e.pk;
-    char buf[96];
-    std::snprintf(buf, sizeof buf, "#%03u %-12s Lv.%3u%s", pk.species(), pk.isEgg() ? "Ei" : pk.nickname().c_str(),
-                  pk.partyLevel(), pk.isShiny() ? " *" : "");
-    std::string s = buf;
-    if (!fitsIn(pk, here)) s += std::string(" ") + DIM + "(hier nicht sichtbar)" + RST;
+    std::string s = pad(monName(pk), 26);
+    char buf[32];
+    if (pk.partyLevel()) { std::snprintf(buf, sizeof buf, "Lv.%3u", pk.partyLevel()); s += buf; } // nur im Team
+    if (!pk.isEgg()) s += pk.gender() == 0 ? " ♂" : pk.gender() == 1 ? " ♀" : "  ";
+    if (pk.isShiny()) s += " *";
+    if (!fitsIn(pk, here)) s += std::string("\n     ") + DIM + "(hier nicht sichtbar)" + RST;
+    return s;
+}
+
+std::string moveLine(const PK6& pk) {
+    std::string s;
+    for (uint16_t m : pk.moves())
+        if (m) s += (s.empty() ? "" : ", ") + g_names.move(m);
     return s;
 }
 
@@ -152,18 +189,24 @@ void drawTop(const State& st) {
     case View::Team:
         say("%sTeam%s\n\n", HL, RST);
         for (int i = 0; i < Bank::PARTY; i++)
-            if (st.bank.party[i].used) say(" %d. %s\n", i + 1, monLine(st.bank.party[i], here).c_str());
+            if (st.bank.party[i].used) {
+                say(" %d. %s\n", i + 1, monLine(st.bank.party[i], here).c_str());
+                say("    %s%s%s\n", DIM, moveLine(st.bank.party[i].pk).c_str(), RST);
+            }
+        if (!g_names.loaded()) say("\n%sNamen fehlen: namen.txt mit tools/gen-namen.mjs\nerzeugen.%s\n", DIM, RST);
         break;
     case View::PC: {
-        say("%sPC  Box %d/%d%s   (L/R wechseln)\n\n", HL, st.box + 1, Bank::BOXES, RST);
-        int n = 0;
-        for (int s = 0; s < Bank::SLOTS; s++) {
+        say("%sPC  Box %d/%d%s   (L/R wechseln, grau = hier nicht sichtbar)\n\n", HL, st.box + 1, Bank::BOXES, RST);
+        // Zwei Spalten à 15 Plätze, damit eine volle Box auf den Bildschirm passt.
+        auto cell = [&](int s) {
             const BankEntry& e = st.bank.boxes[st.box * Bank::SLOTS + s];
-            if (!e.used) continue;
-            say(" %2d. %s\n", s + 1, monLine(e, here).c_str());
-            n++;
-        }
-        if (!n) say(" %s(leer)%s\n", DIM, RST);
+            char num[8];
+            std::snprintf(num, sizeof num, "%2d ", s + 1);
+            if (!e.used) return std::string(num) + DIM + pad("-", 21) + RST;
+            std::string name = pad(cut(monName(e.pk), 20), 21);
+            return std::string(num) + (fitsIn(e.pk, here) ? "" : DIM) + name + RST;
+        };
+        for (int r = 0; r < Bank::SLOTS / 2; r++) say("%s %s\n", cell(r).c_str(), cell(r + Bank::SLOTS / 2).c_str());
         if (st.box == 31 && kindGeneration(here) == 6) say("\n %sBox 32 gibt es nur in Gen 7.%s\n", DIM, RST);
         break;
     }
@@ -172,7 +215,9 @@ void drawTop(const State& st) {
         if (st.bank.items.empty()) say(" %s(leer)%s\n", DIM, RST);
         for (const BankItem& b : st.bank.items) {
             Pouch p = pouchOf(here, b.item);
-            say(" Item %3u  x%-4lu %s%s%s\n", b.item, (unsigned long)b.count, DIM,
+            char cnt[16];
+            std::snprintf(cnt, sizeof cnt, "x%-4lu ", (unsigned long)b.count);
+            say(" %s%s%s%s%s\n", pad(g_names.item(b.item), 22).c_str(), cnt, DIM,
                 p == Pouch::None ? "(hier nicht sichtbar)" : pouchName(p), RST);
         }
         break;
