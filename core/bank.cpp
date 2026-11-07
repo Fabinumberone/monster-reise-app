@@ -2180,6 +2180,8 @@ struct WorldImpl {
             int n = 0;
             for (auto& en : b.party) {
                 if (!en.used || !fitsIn(en.pk, k)) continue;
+                // Teamwerte fehlen bei Pokémon, die aus einer Box kommen: sonst im Spiel Level 0 / 0 KP
+                if (en.pk.d[0xEC] == 0 || rd16(en.pk.d.data() + 0xF2) == 0) refreshParty7(en.pk, sp);
                 PK6 o = exportMon(en, k);
                 s.setPartySlot(n++, o);
                 s.registerDex(o);

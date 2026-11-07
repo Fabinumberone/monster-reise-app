@@ -415,6 +415,9 @@ const char* itemPlaceHere(const State& st, uint16_t item) {
     return p == Pouch::None ? nullptr : pouchName(p);
 }
 
+// Level aus den EP (Box-Pokémon aus Gen 6/7 haben keine Teamwerte)
+int levelOf(const PK6& pk) { return levelForExp(g_species.get(pk.species()).growth, pk.exp()); }
+
 std::string monName(const PK6& pk) {
     if (pk.isEgg()) return "Ei";
     std::string art = g_names.species(pk.species());
@@ -460,7 +463,7 @@ void drawTeam(const State& st) {
             drawIcon(e.pk, x + 2, y + 4, 1.0f, !vis);
             text(monName(e.pk), x + 46, y + 3, 0.52f, C_TEXT, LEFT, 110);
             if (!e.pk.isEgg()) {
-                text("Lv. " + std::to_string(e.pk.partyLevel()), x + 46, y + 21, 0.42f, C_MUTED);
+                text("Lv. " + std::to_string(levelOf(e.pk)), x + 46, y + 21, 0.42f, C_MUTED);
                 if (e.pk.gender() < 2)
                     text(e.pk.gender() == 0 ? "♂" : "♀", x + 180, y + 3, 0.55f, e.pk.gender() == 0 ? C_MALE : C_FEMALE, RIGHT);
                 if (e.pk.isShiny()) text("★", x + 162, y + 3, 0.5f, C_SEL, RIGHT);
@@ -575,7 +578,7 @@ void drawList(const State& st) {
         std::string name = monName(e.pk);
         if (e.pk.isShiny()) name += " ★";
         text(name, 54, y + 2, 0.45f, c, LEFT, 150);
-        if (!e.pk.isEgg()) text("Lv. " + std::to_string(e.pk.partyLevel()), 210, y + 2, 0.42f, c);
+        if (!e.pk.isEgg()) text("Lv. " + std::to_string(levelOf(e.pk)), 210, y + 2, 0.42f, c);
         text(std::string("aus ") + gameOfVersion(e.pk.version()), 386, y + 2, 0.4f, m, RIGHT, 120);
         text(placeName(st, g.pos[size_t(i)]), 54, y + 19, 0.38f, m, LEFT, 220);
         text("OT " + e.pk.otName(), 386, y + 19, 0.38f, m, RIGHT, 110);
@@ -684,7 +687,7 @@ void drawBottom(const State& st) {
         text("Entlassen", 160, 4, 0.6f, C_WHITE, CENTER);
         const BankEntry& e = entryAt(st, st.list[size_t(st.listOpen)].pos[size_t(st.entrySel)]);
         drawIcon(e.pk, 140, 36, 1.0f, false);
-        text(monName(e.pk) + (e.pk.isEgg() ? "" : "  Lv. " + std::to_string(e.pk.partyLevel())), 160, 72, 0.55f, C_WHITE, CENTER, 300);
+        text(monName(e.pk) + (e.pk.isEgg() ? "" : "  Lv. " + std::to_string(levelOf(e.pk))), 160, 72, 0.55f, C_WHITE, CENTER, 300);
         text("wirklich entlassen?", 160, 94, 0.5f, C_WHITE, CENTER);
         text("Es verschwindet aus dem Speicher und bei der nächsten", 160, 120, 0.4f, C_LIGHT, CENTER, 300);
         text("Ankunft aus jedem Spiel. Alte Kopien kommen nicht zurück.", 160, 136, 0.4f, C_LIGHT, CENTER, 300);
@@ -810,6 +813,10 @@ void pickOrDrop(State& st) {
     }
     if (st.held != pos) {
         std::swap(entryAt(st, st.held), entryAt(st, pos));
+        for (int p : {st.held, pos}) { // ins Team geholt: Teamwerte (KP, Level) berechnen
+            BankEntry& e = entryAt(st, p);
+            if (p < Bank::PARTY && e.used && (e.pk.d[0xEC] == 0 || rd16(e.pk.d.data() + 0xF2) == 0)) refreshParty7(e.pk, g_species);
+        }
         st.dirty = true;
     }
     st.held = -1;
