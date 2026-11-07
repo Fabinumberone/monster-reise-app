@@ -1,4 +1,4 @@
-// Pokémon World 3D – Reise-App
+// Pokémon World 3DS – Reise-App
 // Oben: Trainer, Region und die gewählte Ansicht (Team, PC, Beutel). Unten: Menü.
 // Steuerung: Steuerkreuz wählen, A bestätigen, B zurück, L/R Box wechseln, START beenden.
 #include <3ds.h>
@@ -172,7 +172,7 @@ std::string moveLine(const PK6& pk) {
 void drawTop(const State& st) {
     consoleSelect(&topCon);
     consoleClear();
-    say("%sPokémon World 3D – Reise-App%s\n", HL, RST);
+    say("%sPokémon World 3DS%s\n", HL, RST);
     if (!st.bankOk) {
         say("\n%sKein gemeinsamer Speicher gefunden.%s\n%s\n\nEinrichten am PC:\npw3d-reise speicher-neu …\n", ERR, RST,
             st.bankErr.c_str());
