@@ -169,6 +169,7 @@ public:
 
     int count() const;
     void ensureUids(); // fehlende Kennungen vergeben
+    void sortBoxes();  // Boxen nach Pokédex-Nummer (Eier am Ende), ohne Lücken
 
     std::vector<uint8_t> serialize() const;
     bool save(const std::string& path, std::string& err) const;

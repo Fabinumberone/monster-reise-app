@@ -156,6 +156,20 @@ void Bank::leave() {
     current.clear();
 }
 
+void Bank::sortBoxes() {
+    std::vector<BankEntry> all;
+    for (auto& e : boxes)
+        if (e.used) all.push_back(std::move(e));
+    std::stable_sort(all.begin(), all.end(), [](const BankEntry& x, const BankEntry& y) {
+        uint16_t sx = x.pk.isEgg() ? 0xFFFF : x.pk.species(), sy = y.pk.isEgg() ? 0xFFFF : y.pk.species();
+        if (sx != sy) return sx < sy;
+        if (x.pk.form() != y.pk.form()) return x.pk.form() < y.pk.form();
+        return x.uid < y.uid;
+    });
+    boxes.assign(BOXES * SLOTS, BankEntry{});
+    for (size_t i = 0; i < all.size() && i < boxes.size(); i++) boxes[i] = std::move(all[i]);
+}
+
 void Bank::ensureUids() {
     for (auto& e : party) if (e.used && !e.uid) e.uid = nextUid++;
     for (auto& e : boxes) if (e.used && !e.uid) e.uid = nextUid++;
@@ -2029,41 +2043,7 @@ struct WorldImpl {
 
         // ----- Plätze -----
         auto freeBox = [&](std::vector<BankEntry>& bx) -> BankEntry* { for (auto& e : bx) if (!e.used) return &e; return nullptr; };
-        if (f == Fmt::G67) {
-            // Team und Boxen wie im Spiel; nicht hier sichtbare Pokémon behalten ihren Platz, wenn frei
-            std::array<BankEntry, Bank::PARTY> np{};
-            std::vector<BankEntry> nb(b.boxes.size());
-            std::vector<uint32_t> placed;
-            std::vector<BankEntry> team;
-            for (const Present& p : present) if (p.team) { BankEntry* e = byUid(p.uid); if (e) team.push_back(*e); }
-            for (auto& fr : fresh) if (fr.second.team) team.push_back(fr.first);
-            for (const Present& p : present) if (!p.team) { BankEntry* e = byUid(p.uid); if (e) nb[size_t(p.box * Bank::SLOTS + p.slot)] = *e; }
-            for (auto& fr : fresh) if (!fr.second.team) nb[size_t(fr.second.box * Bank::SLOTS + fr.second.slot)] = fr.first;
-            for (const Present& p : present) placed.push_back(p.uid);
-            auto isPlaced = [&](uint32_t uid) { return std::find(placed.begin(), placed.end(), uid) != placed.end(); };
-            std::vector<BankEntry> overflow;
-            for (int i = 0; i < Bank::PARTY; i++) {
-                const BankEntry& e = b.party[size_t(i)];
-                if (!e.used || isPlaced(e.uid)) continue;
-                if (team.size() < Bank::PARTY) team.insert(team.begin() + std::min<size_t>(size_t(i), team.size()), e);
-                else overflow.push_back(e);
-            }
-            for (size_t i = 0; i < team.size() && i < Bank::PARTY; i++) np[i] = team[i];
-            for (size_t i = Bank::PARTY; i < team.size(); i++) overflow.push_back(team[i]);
-            for (size_t i = 0; i < b.boxes.size(); i++) {
-                const BankEntry& e = b.boxes[i];
-                if (!e.used || isPlaced(e.uid)) continue;
-                if (!nb[i].used) nb[i] = e;
-                else overflow.push_back(e);
-            }
-            for (auto& e : overflow) {
-                BankEntry* d = freeBox(nb);
-                if (d) *d = e;
-                else rep.lines.push_back(w.label + ": kein Platz für " + nm.species(e.pk.species()));
-            }
-            b.party = np;
-            b.boxes = nb;
-        } else {
+        {
             // Ansicht: nur das Team zählt. Nicht geliehene Teammitglieder kommen ins Team,
             // aus dem Team abgelegte (hier geschriebene) Pokémon wandern in einen freien Boxplatz.
             std::vector<uint32_t> teamUids;
@@ -2177,27 +2157,32 @@ struct WorldImpl {
             for (int bx = 0; bx < s.boxCount() && !haveBlank; bx++)
                 for (int sl = 0; sl < Bank::SLOTS && !haveBlank; sl++)
                     if (s.boxSlot(bx, sl).species() == 0 && s.boxSlot(bx, sl).checksumValid()) { blank = s.boxSlot(bx, sl); haveBlank = true; }
+            View v = oldView([&](const PK6& pk) { return fitsIn(pk, k); }, s.boxCount() * Bank::SLOTS);
+            if (v.team.empty()) { rep.lines.push_back(w.label + ": kein Pokémon im Team kann dort existieren – nicht geschrieben"); return false; }
             int n = 0;
-            for (auto& en : b.party) {
-                if (!en.used || !fitsIn(en.pk, k)) continue;
+            for (size_t i = 0; i < v.team.size(); i++) {
+                BankEntry& en = *v.team[i];
                 // Teamwerte fehlen bei Pokémon, die aus einer Box kommen: sonst im Spiel Level 0 / 0 KP
-                if (en.pk.d[0xEC] == 0 || rd16(en.pk.d.data() + 0xF2) == 0) refreshParty7(en.pk, sp);
-                PK6 o = exportMon(en, k);
+                PK6 src = en.pk;
+                if (src.d[0xEC] == 0 || rd16(src.d.data() + 0xF2) == 0) refreshParty7(src, sp);
+                BankEntry tmp = en;
+                tmp.pk = src;
+                PK6 o = exportMon(tmp, k);
                 s.setPartySlot(n++, o);
                 s.registerDex(o);
-                written.push_back({en.uid, 1, g67Rec(o)});
+                written.push_back({en.uid, uint8_t(1 | (v.borrowed[i] ? 2 : 0)), g67Rec(o)});
             }
-            if (!n) { rep.lines.push_back(w.label + ": kein Pokémon im Team kann dort existieren – nicht geschrieben"); return false; }
             for (int i = n; i < Bank::PARTY; i++) s.setPartySlot(i, blank);
             s.setPartyCount(n);
+            size_t idx = 0;
             for (int bx = 0; bx < s.boxCount(); bx++)
                 for (int sl = 0; sl < Bank::SLOTS; sl++) {
-                    BankEntry& en = b.boxes[size_t(bx * Bank::SLOTS + sl)];
-                    if (en.used && fitsIn(en.pk, k)) {
-                        PK6 o = exportMon(en, k);
+                    if (idx < v.pc.size()) {
+                        PK6 o = exportMon(*v.pc[idx], k);
                         s.setBoxSlot(bx, sl, o);
                         s.registerDex(o);
-                        written.push_back({en.uid, 0, g67Rec(o)});
+                        written.push_back({v.pc[idx]->uid, 0, g67Rec(o)});
+                        idx++;
                     } else {
                         s.setBoxSlot(bx, sl, blank);
                     }
@@ -2353,6 +2338,7 @@ bool openWorldSave(WorldSave& w, const SpeciesData& sp) {
 }
 
 void writeAll(WorldImpl& wi, std::vector<WorldSave>& saves) {
+    wi.b.sortBoxes(); // alle Boxen nach Pokédex-Nummer (Wunsch des Nutzers)
     for (WorldSave& w : saves) {
         if (!w.ok) continue;
         BankSlot* s = wi.b.slot(w.lowId, w.media);

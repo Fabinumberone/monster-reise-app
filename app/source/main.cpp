@@ -145,6 +145,7 @@ struct State {
     const SaveSlot* current = nullptr;  // zuletzt gestartetes Spiel (für „hier sichtbar“), kann fehlen
     const SaveSlot* target = nullptr;
     std::vector<std::string> notice;    // Meldungen des Abgleichs beim Start
+    int travelRegion = -1, gameScroll = 0; // Spielauswahl: gewählte Region, Blättern in der Liste
     Screen screen = Screen::Menu;
     View view = View::Team;
     int box = 0, cursor = 0, bagScroll = 0;
@@ -625,24 +626,38 @@ const Button B_TRAVEL{8, 32, 304, 44}, B_TEAM{8, 82, 148, 42}, B_PC{164, 82, 148
 const Button B_EXIT{8, 196, 304, 36}, B_BACK{8, 200, 304, 32};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 
-// Schaltflächen der Regionswahl: fünf Spalten, je Region die installierten Spiele.
+// Spielauswahl in zwei Stufen: erst die Region (große Knöpfe), dann die Spiele dieser Region.
 constexpr int NREG = 7;
 const char* REGIONS[NREG] = {"Kanto", "Johto", "Hoenn", "Sinnoh", "Einall", "Kalos", "Alola"};
-constexpr float COLW = 43, COLGAP = 2.5f, COLX = 4;
-// Ein Knopf je Spiel; gibt es Modul und installierte Fassung, wählt man beim Bestätigen.
-std::vector<std::pair<Button, const Game*>> travelButtons(const State& st) {
-    std::vector<std::pair<Button, const Game*>> out;
-    for (int r = 0; r < NREG; r++) {
-        int n = 0;
-        const Game* prev = nullptr;
-        for (const SaveSlot& s : st.installed)
-            if (std::string(s.game->region) == REGIONS[r] && s.game != prev) {
-                out.push_back({Button{COLX + r * (COLW + COLGAP), 56.0f + n++ * 34, COLW, 30}, s.game});
-                prev = s.game;
-            }
-    }
+constexpr int GAME_ROWS = 4;
+
+// Anzeigename: Virtual-Console-Spiele mit „VC“ („Blau (EN, VC)“, „Gelb (VC)“).
+std::string gameTitle(const Game& g) {
+    std::string n = g.name;
+    if (g.gen > 2) return n;
+    if (!n.empty() && n.back() == ')') return n.substr(0, n.size() - 1) + ", VC)";
+    return n + " (VC)";
+}
+
+std::vector<const Game*> gamesIn(const State& st, int r) {
+    std::vector<const Game*> out;
+    for (const SaveSlot& s : st.installed)
+        if (std::string(s.game->region) == REGIONS[r] && std::find(out.begin(), out.end(), s.game) == out.end()) out.push_back(s.game);
     return out;
 }
+
+Button regionButton(int r) { return Button{8.0f + (r % 2) * 156, 32.0f + (r / 2) * 40, 148, 36}; }
+
+// Knöpfe der Spiele in der gewählten Region (sichtbarer Ausschnitt).
+std::vector<std::pair<Button, const Game*>> gameButtons(const State& st) {
+    std::vector<std::pair<Button, const Game*>> out;
+    if (st.travelRegion < 0) return out;
+    auto games = gamesIn(st, st.travelRegion);
+    for (int k = 0; k < GAME_ROWS && st.gameScroll + k < int(games.size()); k++)
+        out.push_back({Button{8, 58.0f + k * 34, 304, 30}, games[size_t(st.gameScroll + k)]});
+    return out;
+}
+const Button B_UP{8, 200, 60, 32}, B_DOWN{252, 200, 60, 32}, B_BACK_MID{72, 200, 176, 32};
 
 const SaveSlot* slotOf(const State& st, const Game* g, FS_MediaType m) {
     for (auto& s : st.installed)
@@ -697,17 +712,33 @@ void drawBottom(const State& st) {
         break;
     }
     case Screen::Travel: {
-        text("Welches Spiel möchtest du spielen?", 160, 4, 0.55f, C_WHITE, CENTER);
-        for (int r = 0; r < NREG; r++) {
-            rect(COLX + r * (COLW + COLGAP), 32, COLW, 20, regionColor(REGIONS[r]));
-            text(REGIONS[r], COLX + r * (COLW + COLGAP) + COLW / 2, 33, 0.45f, C_WHITE, CENTER, COLW - 4);
+        if (st.travelRegion < 0) {
+            text("Welche Region?", 160, 4, 0.6f, C_WHITE, CENTER);
+            for (int r = 0; r < NREG; r++) {
+                int n = int(gamesIn(st, r).size());
+                Button b = regionButton(r);
+                button(b, REGIONS[r], n ? regionColor(REGIONS[r]) : C_BG2, n ? C_WHITE : C_CARD_DIM, 0.6f);
+                text(std::to_string(n) + (n == 1 ? " Spiel" : " Spiele"), b.x + b.w - 6, b.y + b.h - 13, 0.34f, n ? C_WHITE : C_CARD_DIM, RIGHT);
+            }
+            button(Button{164, 192, 148, 36}, "Zurück (B)", C_BG2, C_WHITE, 0.5f);
+            break;
         }
-        for (auto& [b, g] : travelButtons(st)) {
+        rect(0, 0, 320, 26, regionColor(REGIONS[st.travelRegion]));
+        text(std::string(REGIONS[st.travelRegion]) + ": welches Spiel?", 160, 4, 0.55f, C_WHITE, CENTER);
+        auto games = gamesIn(st, st.travelRegion);
+        for (auto& [b, g] : gameButtons(st)) {
             bool isHere = st.current && g == st.current->game;
-            button(b, g->name, C_CARD, C_TEXT, 0.42f);
-            if (isHere) text("zuletzt", b.x + b.w - 4, b.y + 1, 0.3f, C_SEL, RIGHT);
+            bool cart = slotOf(st, g, MEDIATYPE_GAME_CARD) != nullptr;
+            button(b, gameTitle(*g), C_CARD, C_TEXT, 0.5f);
+            if (cart) text("Modul", b.x + 6, b.y + 2, 0.32f, C_MUTED);
+            if (isHere) text("zuletzt", b.x + b.w - 6, b.y + 2, 0.32f, C_SEL, RIGHT);
         }
-        button(B_BACK, "Zurück", C_BG2, C_WHITE, 0.55f);
+        bool more = int(games.size()) > GAME_ROWS;
+        if (more) {
+            button(B_UP, "▲", st.gameScroll > 0 ? C_BG2 : C_BG, C_WHITE, 0.6f);
+            button(B_DOWN, "▼", st.gameScroll + GAME_ROWS < int(games.size()) ? C_BG2 : C_BG, C_WHITE, 0.6f);
+        }
+        button(more ? B_BACK_MID : B_BACK, "Andere Region (B)", C_BG2, C_WHITE, 0.5f);
         break;
     }
     case Screen::Confirm:
@@ -715,7 +746,7 @@ void drawBottom(const State& st) {
     {
         const Game& tg = *st.target->game;
         rect(8, 50, 304, 30, regionColor(tg.region));
-        text(st.target->label() + " (" + tg.region + ")", 160, 56, 0.55f, C_WHITE, CENTER, 296);
+        text(gameTitle(tg) + (st.target->cart() ? " (Modul)" : "") + " – " + tg.region, 160, 56, 0.55f, C_WHITE, CENTER, 296);
         bool both = slotOf(st, &tg, MEDIATYPE_SD) && slotOf(st, &tg, MEDIATYPE_GAME_CARD);
         if (both) {
             button(B_SD, "Installiert", st.target->cart() ? C_BG2 : C_SEL, st.target->cart() ? C_WHITE : C_TEXT, 0.45f);
@@ -774,6 +805,7 @@ void startTravel(State& st) {
         st.message = "Spielen nicht möglich\n" + st.bankErr;
         st.screen = Screen::Error;
     } else {
+        st.travelRegion = -1;
         st.screen = Screen::Travel;
     }
 }
@@ -938,12 +970,24 @@ void input(State& st, u32 down, const touchPosition& t) {
         else if (touch && B_LIST.hit(t)) openList(st);
         else if (touch && B_EXIT.hit(t)) requestQuit(st);
         break;
-    case Screen::Travel:
-        if ((touch && B_BACK.hit(t)) || (down & KEY_B)) { st.screen = Screen::Menu; break; }
+    case Screen::Travel: {
+        if (st.travelRegion < 0) {
+            if ((touch && Button{164, 192, 148, 36}.hit(t)) || (down & KEY_B)) { st.screen = Screen::Menu; break; }
+            if (touch)
+                for (int r = 0; r < NREG; r++)
+                    if (regionButton(r).hit(t) && !gamesIn(st, r).empty()) { st.travelRegion = r; st.gameScroll = 0; }
+            break;
+        }
+        auto games = gamesIn(st, st.travelRegion);
+        bool more = int(games.size()) > GAME_ROWS;
+        int maxScroll = std::max(0, int(games.size()) - GAME_ROWS);
+        if ((touch && (more ? B_BACK_MID : B_BACK).hit(t)) || (down & KEY_B)) { st.travelRegion = -1; break; }
+        if ((touch && more && B_UP.hit(t)) || (down & KEY_DUP)) st.gameScroll = std::max(0, st.gameScroll - 1);
+        if ((touch && more && B_DOWN.hit(t)) || (down & KEY_DDOWN)) st.gameScroll = std::min(maxScroll, st.gameScroll + 1);
         if (touch)
-            for (auto& [b, g] : travelButtons(st))
+            for (auto& [b, g] : gameButtons(st))
                 if (b.hit(t)) {
-                    // Standard: das Medium, das man gerade nutzt, sonst installiert
+                    // Standard: das zuletzt genutzte Medium dieses Spiels, sonst installiert
                     const SaveSlot* sd = slotOf(st, g, MEDIATYPE_SD);
                     const SaveSlot* cart = slotOf(st, g, MEDIATYPE_GAME_CARD);
                     bool preferCart = st.current && st.current->cart() && st.current->game == g;
@@ -951,6 +995,7 @@ void input(State& st, u32 down, const touchPosition& t) {
                     st.screen = Screen::Confirm;
                 }
         break;
+    }
     case Screen::Confirm:
         if (touch && B_SD.hit(t) && slotOf(st, st.target->game, MEDIATYPE_SD) && slotOf(st, st.target->game, MEDIATYPE_GAME_CARD))
             st.target = slotOf(st, st.target->game, MEDIATYPE_SD);
