@@ -3,3 +3,8 @@ extracted/
 node_modules/
 build/
 saves/
+app/build/
+*.3dsx
+*.elf
+*.smdh
+*.cia

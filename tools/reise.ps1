@@ -38,4 +38,6 @@ Copy-Item $speicher (Join-Path $sicherungen "$zeit-speicher.bin")
 
 & $exe reise $speicher $vonDatei $nachDatei
 if ($LASTEXITCODE -ne 0) { Write-Host "Reise fehlgeschlagen, nichts verändert." -ForegroundColor Red; exit 1 }
+# Für die Reise-App: in welchem Spiel man sich jetzt befindet.
+[IO.File]::WriteAllText((Join-Path $sd 'pokemon-world-3d\zuletzt.txt'), "$($titel[$Nach])`n")
 Write-Host "Gute Reise! Sicherungen liegen in $sicherungen" -ForegroundColor Green
