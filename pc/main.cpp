@@ -10,6 +10,7 @@
 
 #include "../core/bank.hpp"
 #include "../core/convert.hpp"
+#include "../core/gb.hpp"
 #include "../core/items.hpp"
 #include "../core/names.hpp"
 #include "../core/memecrypto.hpp"
@@ -356,6 +357,66 @@ static int cmdReise(const char* bankPath, const char* fromPath, const char* toPa
     return 0;
 }
 
+// ---------- Gen 1/2 ----------
+static void printGBMon(const char* label, const GBMon& m) {
+    std::string moves;
+    for (uint16_t a : m.moves)
+        if (a) moves += (moves.empty() ? "" : ", ") + g_names.move(a);
+    std::printf("  %-8s Nr. %3u %s  \"%s\"  OT \"%s\" %05u  Lv. %u  EP %u  DVs %04X%s\n", label, m.species,
+                g_names.species(m.species).c_str(), m.nickname.c_str(), m.ot.c_str(), m.tid, m.level, unsigned(m.exp),
+                m.dvs, m.shiny() ? "  schillernd" : "");
+    std::printf("           Attacken: %s", moves.c_str());
+    if (m.gen == 2) {
+        uint16_t it = gen2ItemToModern(m.heldItem);
+        std::printf("  | Item: %s  Freundschaft %u", m.heldItem ? (it ? g_names.item(it).c_str() : "?") : "-", m.friendship);
+    }
+    if (m.maxHp) std::printf("  | KP %u/%u", m.hp, m.maxHp);
+    std::printf("\n");
+}
+
+static void printGBItems(const char* title, const std::vector<GBItem>& items, int gen) {
+    std::printf("%s:", title);
+    if (items.empty()) std::printf(" (leer)");
+    for (const GBItem& i : items) {
+        uint16_t mod = gen == 1 ? gen1ItemToModern(i.id) : gen2ItemToModern(i.id);
+        std::printf(" %s×%u", mod ? g_names.item(mod).c_str() : ("[0x" + std::to_string(i.id) + "]").c_str(), i.count);
+    }
+    std::printf("\n");
+}
+
+static int cmdInfoGB(const std::string& path) {
+    std::vector<uint8_t> data;
+    if (!readFile(path, data)) { std::fprintf(stderr, "Kann %s nicht lesen\n", path.c_str()); return 1; }
+    SaveGB s;
+    std::string err;
+    if (!s.load(std::move(data), err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    std::printf("Spiel: %s (Gen %d), Prüfsumme %s\n", gbGameName(s.game()), s.generation(), s.checksumValid() ? "ok" : "FALSCH");
+    std::printf("Trainer: \"%s\"  ID %05u  Geld %u  aktuelle Box %d\n\n", s.trainerName().c_str(), s.tid(), unsigned(s.money()),
+                s.currentBox() + 1);
+    auto party = s.party();
+    std::printf("Team (%zu):\n", party.size());
+    for (size_t i = 0; i < party.size(); i++) printGBMon(("#" + std::to_string(i + 1)).c_str(), party[i]);
+    std::printf("\nBoxen:\n");
+    for (int b = 0; b < s.boxCount(); b++) {
+        auto box = s.box(b);
+        for (size_t i = 0; i < box.size(); i++) {
+            char lbl[16];
+            std::snprintf(lbl, sizeof lbl, "B%02d/%02zu", b + 1, i + 1);
+            printGBMon(lbl, box[i]);
+        }
+    }
+    std::printf("\n");
+    printGBItems(s.generation() == 1 ? "Beutel" : "Item-Tasche", s.bag(), s.generation());
+    if (s.generation() == 2) {
+        printGBItems("Ball-Tasche", s.balls(), 2);
+        std::printf("Basis-Items:");
+        for (uint8_t k : s.keyItems()) std::printf(" [0x%02X]", k);
+        std::printf("\n");
+    }
+    printGBItems("Item-PC", s.pcItems(), s.generation());
+    return 0;
+}
+
 int runSelftest();
 
 int main(int argc, char** argv) {
@@ -363,7 +424,12 @@ int main(int argc, char** argv) {
         g_names.load(std::string(appdata) + "\\Azahar\\sdmc\\pokemon-world-3d\\namen.txt");
     std::string cmd = argc > 1 ? argv[1] : "";
     if (cmd == "selbsttest" && argc == 2) return runSelftest();
-    if (cmd == "info" && argc == 3) { auto s = open(argv[2], false); return s ? cmdInfo(*s, false) : 1; }
+    if (cmd == "info" && argc == 3) {
+        std::vector<uint8_t> probe;
+        if (readFile(argv[2], probe) && (probe.size() == 0x8000 || probe.size() == 0x8010)) return cmdInfoGB(argv[2]);
+        auto s = open(argv[2], false);
+        return s ? cmdInfo(*s, false) : 1;
+    }
     if (cmd == "bloecke" && argc == 3) { auto s = open(argv[2], false); return s ? cmdInfo(*s, true) : 1; }
     if (cmd == "scan" && argc == 3) { auto s = open(argv[2], false); return s ? cmdScan(*s) : 1; }
     if (cmd == "pokedex" && argc == 3) return cmdPokedex(argv[2]);
