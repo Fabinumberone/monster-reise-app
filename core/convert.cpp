@@ -14,9 +14,8 @@ struct Limits {
 };
 
 // Höchste gültige Werte je Spiel (Arten, Attacken, Items, Fähigkeiten, Bälle, Herkunftsspiel).
-// Herkunft bis Version 41 (Virtual Console Rot … Kristall). Für Gen 6 ist das ein Test (2026-11-07):
-// offiziell kommen VC-Pokémon nur nach Gen 7; ob X/ORAS Herkunft 35–41 und Fundort 30013/30017 vertragen,
-// prüft der Nutzer. Falls nicht: Herkunft nur in der Gen-6-Ansicht tarnen.
+// Herkunft bis Version 41 (Virtual Console Rot … Kristall). Offiziell kommen VC-Pokémon nur nach Gen 7;
+// in X getestet (2026-11-07): Statusseite funktioniert, Fundort erscheint als „entfernter Ort“.
 Limits limitsOf(GameKind k) {
     switch (k) {
     case GameKind::XY: return {721, 621, 717, 191, 25, 41};
