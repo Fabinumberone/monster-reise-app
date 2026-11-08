@@ -904,6 +904,20 @@ int main(int argc, char** argv) {
     if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
     if (cmd == "abgleich" && argc >= 4) return cmdAbgleich(argc, argv);
     if (cmd == "welt" && argc >= 4) return cmdWelt(argc, argv);
+    if (cmd == "pass" && argc >= 3) { // Trainerpass: Spielzeit und Orden je Spielstand
+        for (int i = 2; i < argc; i++) {
+            std::vector<uint8_t> d;
+            std::string err;
+            if (!readFile(argv[i], d)) continue;
+            int mins = -1, badges = -1, bmax = 0;
+            if (isNDSFile(argv[i])) { SaveNDS s; if (s.load(d, err)) { mins = s.playMinutes(); badges = s.badgeCount(); bmax = s.badgeMax(); } }
+            else if (isGBAFile(argv[i])) { SaveGBA s; if (s.load(d, err)) { mins = s.playMinutes(); badges = s.badgeCount(); bmax = s.badgeMax(); } }
+            else if (isGBFile(argv[i])) { SaveGB s; if (s.load(d, err)) { mins = s.playMinutes(); badges = s.badgeCount(); bmax = s.badgeMax(); } }
+            else if (auto s = openSave(d, err)) { mins = playMinutes67(*s); badges = badgeCount67(*s); bmax = 8; }
+            std::printf("%-45s Spielzeit %d:%02d  Orden %d/%d\n", argv[i], mins / 60, mins % 60, badges, bmax);
+        }
+        return 0;
+    }
     if (cmd == "test-entwickeln" && argc >= 3) { // nur lesen: zeigt, was eine Tauschentwicklung ändern würde
         Bank bank;
         bank.species = &g_species;

@@ -262,3 +262,20 @@ std::vector<GBAItem> SaveGBA::pouch(Pouch p) const {
 }
 
 } // namespace pw3d
+
+namespace pw3d {
+// Kleiner Block: Spielzeit +0xE (u16 Stunden, +0x10 Minuten). Orden = Ereignis-Flags im großen Block:
+// Rubin/Saphir Flags ab 0x1220, Orden ab Flag 0x807; Smaragd 0x1270/0x867; Feuerrot/Blattgrün 0xEE0/0x820.
+int SaveGBA::playMinutes() const { return (small_[0xE] | (small_[0xF] << 8)) * 60 + small_[0x10]; }
+int SaveGBA::badgeCount() const {
+    uint32_t flags = game_ == GBAGame::RS ? 0x1220 : game_ == GBAGame::E ? 0x1270 : 0xEE0;
+    int start = game_ == GBAGame::RS ? 0x807 : game_ == GBAGame::E ? 0x867 : 0x820;
+    int n = 0;
+    for (int i = 0; i < 8; i++) {
+        int f = start + i;
+        if (flags + uint32_t(f >> 3) < large_.size() && (large_[flags + uint32_t(f >> 3)] >> (f & 7) & 1)) n++;
+    }
+    return n;
+}
+int SaveGBA::badgeMax() const { return 8; }
+} // namespace pw3d

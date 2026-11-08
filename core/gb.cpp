@@ -419,3 +419,22 @@ std::vector<uint8_t> SaveGB::keyItems() const {
 }
 
 } // namespace pw3d
+
+namespace pw3d {
+static int bits(unsigned v) { int n = 0; for (; v; v &= v - 1) n++; return n; }
+
+// Gen 1 (international): Spielzeit 0x2CED (u8 Stunden, +2 Minuten), Orden 0x2602.
+// Gen 2: Spielzeit GS 0x2053 / Kristall 0x2052 (u16 Stunden big endian, +2 Minuten), Orden GS 0x23E4 /
+// Kristall 0x23E5 (Johto-Byte, dann Kanto-Byte).
+int SaveGB::playMinutes() const {
+    if (game_ == GBGame::RBY) return data_[0x2CED] * 60 + data_[0x2CED + 2];
+    uint32_t o = game_ == GBGame::Crystal ? 0x2052 : 0x2053;
+    return ((data_[o] << 8) | data_[o + 1]) * 60 + data_[o + 2];
+}
+int SaveGB::badgeCount() const {
+    if (game_ == GBGame::RBY) return bits(data_[0x2602]);
+    uint32_t o = game_ == GBGame::Crystal ? 0x23E5 : 0x23E4;
+    return bits(data_[o]) + bits(data_[o + 1]);
+}
+int SaveGB::badgeMax() const { return game_ == GBGame::RBY ? 8 : 16; }
+} // namespace pw3d

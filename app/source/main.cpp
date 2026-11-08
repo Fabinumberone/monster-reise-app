@@ -133,7 +133,7 @@ struct BackupSet {
     std::string stamp;               // „20261108-102205“
     std::vector<std::string> files;  // Dateinamen in sicherungen/
 };
-enum class View { Team, PC, Bag, List, Dex, Journal };
+enum class View { Team, PC, Bag, List, Dex, Journal, Pass };
 
 // Liste: alle Pokémon nach Nationaldex-Nummer gruppiert (Positionen wie State::held).
 struct ListGroup {
@@ -164,6 +164,9 @@ struct State {
     int dexScroll = 0;
     std::vector<std::string> journal;     // Reisetagebuch (neueste zuerst)
     int journalScroll = 0;
+    struct PassRow { std::string game, region, name; int minutes = -1, badges = -1, badgeMax = 0; };
+    std::vector<PassRow> pass;            // Trainerpass: je Spielstand
+    int passScroll = 0;
     // Tauschentwicklung: Pokémon, gewählte Möglichkeit, Partner (Laukaps/Schnuthelm, sonst -1)
     int evoPos = -1, evoPartner = -1;
     TradeEvo evo;
@@ -831,6 +834,28 @@ void drawJournal(const State& st) {
     text("Steuerkreuz: blättern   Y: weiter", 392, 226, 0.36f, C_LIGHT, RIGHT);
 }
 
+constexpr int PASS_ROWS = 6;
+void drawPass(const State& st) {
+    int total = 0;
+    for (auto& p : st.pass) if (p.minutes > 0) total += p.minutes;
+    text("Trainerpass", 8, 30, 0.5f, C_WHITE);
+    text("Spielzeit gesamt " + std::to_string(total / 60) + ":" + (total % 60 < 10 ? "0" : "") + std::to_string(total % 60) + " h", 392, 32, 0.42f, C_LIGHT, RIGHT);
+    if (st.pass.empty()) { text("Keine Spielstände gelesen.", 200, 120, 0.5f, C_LIGHT, CENTER); return; }
+    for (int r = 0; r < PASS_ROWS && st.passScroll + r < int(st.pass.size()); r++) {
+        const State::PassRow& p = st.pass[size_t(st.passScroll + r)];
+        float y = 50 + float(r) * 28;
+        rect(8, y, 384, 26, r % 2 ? C_BG2 : C_BG);
+        rect(8, y, 5, 26, regionColor(p.region.c_str()));
+        text(p.game, 18, y + 1, 0.42f, C_WHITE, LEFT, 200);
+        text(p.region + "  ·  " + p.name, 18, y + 13, 0.34f, C_LIGHT, LEFT, 200);
+        if (p.minutes >= 0)
+            text(std::to_string(p.minutes / 60) + ":" + (p.minutes % 60 < 10 ? "0" : "") + std::to_string(p.minutes % 60) + " h", 300, y + 6, 0.42f, C_WHITE, RIGHT);
+        text(p.badges >= 0 ? std::to_string(p.badges) + "/" + std::to_string(p.badgeMax) + " Orden" : "keine Orden", 386, y + 6, 0.38f,
+             p.badges > 0 && p.badges == p.badgeMax ? C_OK : C_LIGHT, RIGHT);
+    }
+    text("Steuerkreuz: blättern   Y: weiter", 392, 226, 0.36f, C_LIGHT, RIGHT);
+}
+
 void drawTop(const State& st) {
     drawHeader(st);
     if (st.loading) {
@@ -849,6 +874,7 @@ void drawTop(const State& st) {
     case View::List: drawList(st); break;
     case View::Dex: drawDex(st); break;
     case View::Journal: drawJournal(st); break;
+    case View::Pass: drawPass(st); break;
     }
     if (st.held >= 0 && (st.view == View::Team || st.view == View::PC)) {
         rect(0, 222, 400, 18, C_HEAD);
@@ -1633,6 +1659,33 @@ void editShortName(State& st) {
     journalAdd("Kurzname für Gen 1–5: " + (n.empty() ? std::string("erste 7 Zeichen") : n));
 }
 
+// Trainerpass: Spielzeit und Orden je Spielstand (aus den beim Start gelesenen Spielständen)
+void openPass(State& st) {
+    st.pass.clear();
+    for (size_t i = 0; i < st.saves.size() && i < st.installed.size(); i++) {
+        WorldSave& w = st.saves[i];
+        if (!w.ok) continue;
+        const SaveSlot& slot = st.installed[i];
+        State::PassRow p;
+        p.game = gameTitle(*slot.game) + (slot.cart() ? " (Modul)" : "");
+        p.region = slot.game->region;
+        p.name = slot.game->gen >= 6 ? st.bank.trainer.name : shortTrainerName(st.bank.trainer.name);
+        if (slot.game->gen >= 6 && w.s67) { p.minutes = playMinutes67(*w.s67); p.badges = badgeCount67(*w.s67); p.badgeMax = 8; }
+        else if (slot.game->gen <= 2) { p.minutes = w.gb.playMinutes(); p.badges = w.gb.badgeCount(); p.badgeMax = w.gb.badgeMax(); }
+        else if (slot.game->gen == 3) { p.minutes = w.gba.playMinutes(); p.badges = w.gba.badgeCount(); p.badgeMax = w.gba.badgeMax(); }
+        else { p.minutes = w.nds.playMinutes(); p.badges = w.nds.badgeCount(); p.badgeMax = w.nds.badgeMax(); }
+        st.pass.push_back(p);
+    }
+    // nach Region (wie die Regionswahl), dann Name
+    static const char* order[] = {"Kanto", "Johto", "Hoenn", "Sinnoh", "Einall", "Kalos", "Alola"};
+    auto idx = [&](const std::string& r) { for (int k = 0; k < 7; k++) if (r == order[k]) return k; return 7; };
+    std::stable_sort(st.pass.begin(), st.pass.end(), [&](const State::PassRow& a, const State::PassRow& b) {
+        return idx(a.region) != idx(b.region) ? idx(a.region) < idx(b.region) : a.game < b.game;
+    });
+    st.passScroll = 0;
+    st.view = View::Pass;
+}
+
 void openList(State& st) {
     st.detail = false;
     st.held = -1;
@@ -1758,6 +1811,13 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (down & KEY_DDOWN) st.teamCursor = (st.teamCursor + 2) % Bank::PARTY;
             if (down & KEY_DUP) st.teamCursor = (st.teamCursor + Bank::PARTY - 2) % Bank::PARTY;
         }
+        if (st.view == View::Pass) {
+            int maxScroll = std::max(0, int(st.pass.size()) - PASS_ROWS);
+            if (down & KEY_DDOWN) st.passScroll = std::min(maxScroll, st.passScroll + 1);
+            if (down & KEY_DUP) st.passScroll = std::max(0, st.passScroll - 1);
+            if (down & KEY_DRIGHT) st.passScroll = std::min(maxScroll, st.passScroll + PASS_ROWS);
+            if (down & KEY_DLEFT) st.passScroll = std::max(0, st.passScroll - PASS_ROWS);
+        }
         if (st.view == View::Journal) {
             int maxScroll = std::max(0, int(st.journal.size()) - JOURNAL_ROWS);
             if (down & KEY_DDOWN) st.journalScroll = std::min(maxScroll, st.journalScroll + 1);
@@ -1782,6 +1842,7 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (st.view == View::Bag) openList(st);
             else if (st.view == View::List) openDex(st);
             else if (st.view == View::Dex) openJournal(st);
+            else if (st.view == View::Journal) openPass(st);
             else st.view = st.view == View::Team ? View::PC : st.view == View::PC ? View::Bag : View::Team;
         }
     }

@@ -54,3 +54,19 @@ std::unique_ptr<SaveFile> openSave(std::vector<uint8_t> data, std::string& err) 
 }
 
 } // namespace pw3d
+
+namespace pw3d {
+// Spielzeit: XY/ORAS 0x1800, SM 0x40C00, USUM 0x41000 (u16 Stunden, +2 Minuten). Orden Gen 6: 0x4200 + 0xC.
+int playMinutes67(const SaveFile& s) {
+    const auto& d = s.raw();
+    uint32_t o = s.kind() == GameKind::SM ? 0x40C00 : s.kind() == GameKind::USUM ? 0x41000 : 0x1800;
+    if (o + 4 > d.size()) return -1;
+    return (d[o] | (d[o + 1] << 8)) * 60 + d[o + 2];
+}
+int badgeCount67(const SaveFile& s) {
+    if (s.generation() != 6) return -1;
+    int n = 0;
+    for (unsigned v = s.raw()[0x4200 + 0xC]; v; v &= v - 1) n++;
+    return n;
+}
+} // namespace pw3d

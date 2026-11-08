@@ -102,6 +102,10 @@ public:
     // Pokédex: gefangen, gesehen (Geschlecht, Gen 5 auch Schillern), Sprache (nach PKHeX Zukan4/Zukan5).
     void registerDex(const PK45& pk);
     int dexCaughtCount() const;
+    // Trainerpass (nur lesen, Stellen nach PKHeX): Spielzeit in Minuten, Orden (Anzahl gesetzter Bits) und Höchstzahl
+    int playMinutes() const;
+    int badgeCount() const;
+    int badgeMax() const;
     void finalize();
 
 private:

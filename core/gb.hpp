@@ -96,6 +96,10 @@ public:
     void setMoney(uint32_t v);
     void setTrainer(const std::string& name, uint16_t tid);
     void registerDex(uint16_t species);
+    // Trainerpass (nur lesen, Stellen nach PKHeX): Spielzeit in Minuten, Orden (Anzahl gesetzter Bits) und Höchstzahl
+    int playMinutes() const;
+    int badgeCount() const;
+    int badgeMax() const;
     // Prüfsummen (Gen 1 inkl. Box-Bänke und „Boxen eingerichtet“), Gen 2 inkl. Sicherungskopie.
     void finalize();
 

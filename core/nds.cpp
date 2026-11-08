@@ -417,3 +417,21 @@ std::vector<NDSItem> SaveNDS::pouch(Pouch p) const {
 }
 
 } // namespace pw3d
+
+namespace pw3d {
+static int bits(unsigned v) { int n = 0; for (; v; v &= v - 1) n++; return n; }
+
+// Gen 4: Trainerdaten (allgemein + 0x64, Platin + 0x68): Orden +0x1A (HGSS Kanto +0x1F), Spielzeit +0x22
+// (u16 Stunden, +2 Minuten). Gen 5: Spielzeit 0x19400 + 0x24, Orden BW 0x21200 + 4 / S2W2 0x21100 + 4.
+int SaveNDS::playMinutes() const {
+    uint32_t o = generation() == 4 ? trainerOfs() + 0x22 : 0x19400 + 0x24;
+    return (data_[o] | (data_[o + 1] << 8)) * 60 + data_[o + 2];
+}
+int SaveNDS::badgeCount() const {
+    if (generation() == 5) return bits(data_[(game_ == NDSGame::BW ? 0x21200 : 0x21100) + 4]);
+    int n = bits(data_[trainerOfs() + 0x1A]);
+    if (game_ == NDSGame::HGSS) n += bits(data_[trainerOfs() + 0x1F]);
+    return n;
+}
+int SaveNDS::badgeMax() const { return game_ == NDSGame::HGSS ? 16 : 8; }
+} // namespace pw3d

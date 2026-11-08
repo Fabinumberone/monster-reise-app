@@ -26,6 +26,11 @@ struct Block6 {
     bool ok() const { return storedCrc == computedCrc; }
 };
 
+class SaveFile;
+// Trainerpass (nur lesen): Spielzeit in Minuten; Orden (Gen 6, Gen 7 hat keine: -1)
+int playMinutes67(const SaveFile& s);
+int badgeCount67(const SaveFile& s);
+
 class SaveFile {
 public:
     virtual ~SaveFile() = default;
