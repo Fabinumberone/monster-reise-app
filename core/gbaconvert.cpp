@@ -340,6 +340,11 @@ PK3 pk7ToGen3(const PK6& pk, const PK3* snap, const GBAContext& ctx) {
         wr16(d + G_ORIGINS, origins);
         wr32(d + G_RIBBONS, (s[O_FLAGS] & 1) ? 0x80000000u : 0); // Schicksalhafte Begegnung (Mew, Deoxys …)
     }
+    // Eigene Pokémon: OT-Geschlecht = Spielfigur dieses Spiels (sonst „getauscht“: Bonus-EP)
+    if (own && ctx.gameGender >= 0) {
+        uint16_t org = rd16(d + G_ORIGINS);
+        wr16(d + G_ORIGINS, uint16_t((org & 0x7FFF) | ((ctx.gameGender & 1) << 15)));
+    }
     uint32_t iv = pk.iv32() & 0x3FFFFFFF;
     if (pk.isEgg()) iv |= 1u << 30;
     if (s[O_ABILITYNUM] == 2) iv |= 1u << 31;

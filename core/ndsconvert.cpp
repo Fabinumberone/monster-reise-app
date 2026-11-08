@@ -332,6 +332,9 @@ PK45 pk7ToGen45(const PK6& pk, const PK45* snapIn, const NDSContext& ctx) {
         d[N_METLEVEL] = s[O_METLEVEL]; // Level + Trainer-Geschlecht
     }
 
+    // Eigene Pokémon: OT-Geschlecht = Spielfigur dieses Spiels (sonst „getauscht“: Bonus-EP)
+    if (own && ctx.gameGender >= 0) d[N_METLEVEL] = uint8_t((d[N_METLEVEL] & 0x7F) | ((ctx.gameGender & 1) << 7));
+
     // Teamwerte
     uint8_t level = levelForExp(si.growth, rd32(d + N_EXP));
     std::memset(d + 0x88, 0, n.d.size() - 0x88);

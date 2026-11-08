@@ -720,8 +720,8 @@ static int cmdInfoNDS(const std::string& path) {
     auto line = [&](const char* lbl, const PK45& pk) {
         uint16_t sp = pk.species();
         uint8_t level = pk.party ? pk.partyLevel() : levelForExp(g_species.get(sp).growth, pk.exp());
-        std::printf("  %-8s Nr. %3u %s  \"%s\"  OT \"%s\" %05u/%05u  Lv. %u  EP %u  PID %08X  Wesen %u  Form %u%s%s%s\n", lbl, sp,
-                    g_names.species(sp).c_str(), pk.nickname().c_str(), pk.otName().c_str(), pk.tid(), pk.sid(), level,
+        std::printf("  %-8s Nr. %3u %s  \"%s\"  OT \"%s\"%s %05u/%05u  Lv. %u  EP %u  PID %08X  Wesen %u  Form %u%s%s%s\n", lbl, sp,
+                    g_names.species(sp).c_str(), pk.nickname().c_str(), pk.otName().c_str(), (pk.d[0x84] & 0x80) ? "(w)" : "(m)", pk.tid(), pk.sid(), level,
                     unsigned(pk.exp()), unsigned(pk.pid()), pk.nature(), pk.form(), pk.isEgg() ? "  Ei" : ((pk.tid() ^ pk.sid() ^ (pk.pid() >> 16) ^ (pk.pid() & 0xFFFF)) < 8 ? "  schillernd" : ""),
                     pk.isNicknamed() ? "  Spitzname" : "", pk.checksum() == pk.calcChecksum() ? "" : "  PRÜFSUMME FALSCH");
         std::printf("           Attacken:");

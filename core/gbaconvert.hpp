@@ -28,6 +28,7 @@ struct GBAContext {
     uint8_t version = 2;    // Herkunft für Pokémon aus späteren Spielen (1 Saphir, 2 Rubin, 3 Smaragd, 4 FR, 5 BG)
     uint16_t gameTid = 0, gameSid = 0; // Trainer des Spielstands (dessen Pokémon gelten als eigene)
     std::string gameOt;
+    int gameGender = -1;    // Geschlecht der Spielfigur (eigene Pokémon bekommen es als OT-Geschlecht)
 };
 
 // Trainername, wie ihn ein Gen-3-Spiel speichern kann (höchstens 7 Zeichen).

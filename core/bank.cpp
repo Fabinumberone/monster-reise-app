@@ -1821,6 +1821,7 @@ struct WorldImpl {
         c.gameTid = w.gba.tid();
         c.gameSid = w.gba.sid();
         c.gameOt = w.gba.trainerName();
+        c.gameGender = w.gba.trainerGender();
         return c;
     }
     NDSContext ndsCtx(const WorldSave& w) {
@@ -1833,6 +1834,7 @@ struct WorldImpl {
         c.gameTid = w.nds.tid();
         c.gameSid = w.nds.sid();
         c.gameOt = w.nds.trainerName();
+        c.gameGender = w.nds.trainerGender();
         return c;
     }
 
@@ -2237,6 +2239,14 @@ struct WorldImpl {
                 for (int sl = 0; sl < Bank::SLOTS && !haveBlank; sl++)
                     if (s.boxSlot(bx, sl).species() == 0 && s.boxSlot(bx, sl).checksumValid()) { blank = s.boxSlot(bx, sl); haveBlank = true; }
             View v = oldView([&](const PK6& pk) { return fitsIn(pk, k); }, s.boxCount() * Bank::SLOTS);
+            // Eigene Pokémon: OT-Geschlecht = Spielfigur dieses Spiels (sonst gelten sie als getauscht)
+            const uint8_t playerGender = s.trainer().gender & 1;
+            auto ownGender = [&](PK6& o) {
+                if (o.tid() != b.trainer.tid || o.sid() != b.trainer.sid || o.otName() != b.trainer.name) return;
+                if ((o.d[0xDD] >> 7) == playerGender) return;
+                o.d[0xDD] = uint8_t((o.d[0xDD] & 0x7F) | (playerGender << 7));
+                o.updateChecksum();
+            };
             if (v.team.empty()) { rep.lines.push_back(w.label + ": kein Pokémon im Team kann dort existieren – nicht geschrieben"); return false; }
             int n = 0;
             for (size_t i = 0; i < v.team.size(); i++) {
@@ -2247,6 +2257,7 @@ struct WorldImpl {
                 BankEntry tmp = en;
                 tmp.pk = src;
                 PK6 o = exportMon(tmp, k);
+                ownGender(o);
                 s.setPartySlot(n++, o);
                 s.registerDex(o);
                 written.push_back({en.uid, uint8_t(1 | (v.borrowed[i] ? 2 : 0)), g67Rec(o)});
@@ -2258,6 +2269,7 @@ struct WorldImpl {
                 for (int sl = 0; sl < Bank::SLOTS; sl++) {
                     if (idx < v.pc.size()) {
                         PK6 o = exportMon(*v.pc[idx], k);
+                        ownGender(o);
                         s.setBoxSlot(bx, sl, o);
                         s.registerDex(o);
                         written.push_back({v.pc[idx]->uid, 0, g67Rec(o)});

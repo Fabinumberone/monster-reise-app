@@ -29,6 +29,7 @@ struct NDSContext {
     uint8_t version = 12;       // Herkunft für Pokémon aus späteren Spielen
     uint16_t gameTid = 0, gameSid = 0;
     std::string gameOt;
+    int gameGender = -1;        // Geschlecht der Spielfigur (eigene Pokémon bekommen es als OT-Geschlecht)
 };
 
 // Trainername, wie ihn ein Gen-4/5-Spiel speichern kann (höchstens 7 Zeichen).

@@ -1296,24 +1296,8 @@ bool drawMapTop(const State& st) {
                                                          : camRegion(st.travelRegion), 700);
     State::Cam c = camNow(st);
     g_map.draw(c.x, c.y, c.s);
-    // Regionen markieren (je weiter herausgezoomt, desto mehr Namen)
-    for (int r = 0; r < NREG; r++) {
-        int n = int(gamesIn(st, r).size());
-        float x = (MAP_REGIONS[r].x * g_map.width() - c.x) * c.s + 200, y = (MAP_REGIONS[r].y * g_map.height() - c.y) * c.s + 120;
-        if (x < -40 || x > 440 || y < -20 || y > 260) continue;
-        bool sel = st.screen == Screen::Travel && st.travelRegion == r;
-        u32 col = n ? regionColor(REGIONS[r]) : C2D_Color32(0x80, 0x80, 0x80, 0xFF);
-        C2D_DrawCircleSolid(x, y, 0, sel ? 7 : 5, C_WHITE);
-        C2D_DrawCircleSolid(x, y, 0, sel ? 5 : 3.5f, col);
-        if (c.s < 0.35f || sel) mapText(REGIONS[r], x, y + 6, sel ? 0.55f : 0.42f, n ? C_WHITE : C_LIGHT, CENTER);
-    }
-    // Kopfzeile schlicht
-    rect(0, 0, 400, 22, C2D_Color32(0x10, 0x18, 0x24, 0xC0));
-    if (flying) {
-        mapText(st.flightText, 200, 3, 0.5f, C_WHITE, CENTER);
-    } else if (st.screen == Screen::Travel) {
-        mapText(st.travelRegion < 0 ? "Weltkarte – wohin geht die Reise?" : std::string(REGIONS[st.travelRegion]), 200, 3, 0.5f, C_WHITE, CENTER);
-    } else {
+    // Keine Punkte, Namen oder Kopfzeile auf der Karte (Wunsch des Nutzers); nur die Bordkarte beim Bestätigen
+    if (st.screen == Screen::Confirm) {
         // Bordkarte
         const Game& tg = *st.target->game;
         std::string from = st.current ? std::string(st.current->game->region) + " (" + gameTitle(*st.current->game) + ")" : "–";
