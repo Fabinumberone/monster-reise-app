@@ -1126,9 +1126,12 @@ void doLaunch(State& st) {
         return;
     }
     st.current = st.target;
-    st.message = launcherName(*st.target)
-                     ? std::string("Alles aktuell\nStarte jetzt ") + launcherName(*st.target) + " und lade\n" + gameTitle(*st.target->game) + "."
-                     : std::string("Spiel konnte nicht gestartet werden\nBitte starte ") + st.target->label() + " selbst.";
+    if (isDsCart(*st.target->game))
+        st.message = "Alles aktuell\nBeende die App (START) und starte\n" + gameTitle(*st.target->game) + " im HOME-Menü über das Modul.";
+    else
+        st.message = launcherName(*st.target)
+                         ? std::string("Alles aktuell\nStarte jetzt ") + launcherName(*st.target) + " und lade\n" + gameTitle(*st.target->game) + "."
+                         : std::string("Spiel konnte nicht gestartet werden\nBitte starte ") + st.target->label() + " selbst.";
     st.screen = Screen::Error;
 }
 

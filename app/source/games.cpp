@@ -328,14 +328,16 @@ const char* dsGameCode(u8 version) {
 } // namespace
 
 const char* launcherName(const SaveSlot& s) {
-    if (isDsCart(*s.game)) return nullptr;
+    if (isDsCart(*s.game)) return "das HOME-Menü (Modul)";
     if (s.game->gen == 3) return "mGBA";
     if (s.game->gen == 4 || s.game->gen == 5) return "TWiLight Menu++";
     return nullptr;
 }
 
 bool launchGame(const SaveSlot& s) {
-    if (isDsCart(*s.game)) return ndscard::launch();
+    // DS-Module nicht aus der App starten: NS_RebootToTitle(Modul, 0) bringt den Systemdienst ns zum
+    // Absturz (2026-11-08, New 2DS XL). Gestartet wird über das HOME-Menü.
+    if (isDsCart(*s.game)) return false;
     if (s.game->gen == 3) return titleInstalled(MGBA, MEDIATYPE_SD) && launchTitle(MGBA, MEDIATYPE_SD);
     if (s.game->gen == 4 || s.game->gen == 5) {
         if (const char* c = dsGameCode(s.game->gbVersion)) {
