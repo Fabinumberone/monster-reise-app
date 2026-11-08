@@ -186,6 +186,11 @@ bool SaveNDS::load(std::vector<uint8_t> data, std::string& err) {
             footer_ = l.footer;
             general_ = activeBlock(data_, 0, l.gSize);
             storage_ = activeBlock(data_, l.sStart, l.sSize);
+            // Wie das Spiel: ist der neuere Block beschädigt (z. B. halb gespeichert), den anderen nehmen
+            for (auto [blk, size] : {std::pair<uint32_t*, uint32_t>{&general_, l.gSize}, {&storage_, l.sSize}}) {
+                uint32_t other = *blk >= PARTITION ? *blk - PARTITION : *blk + PARTITION;
+                if (!g4BlockValid(data_, *blk, size, l.footer) && g4BlockValid(data_, other, size, l.footer)) *blk = other;
+            }
             return true;
         }
     }
@@ -368,8 +373,15 @@ int SaveNDS::dexCaughtCount() const {
 
 void SaveNDS::finalize() {
     if (generation() == 4) {
-        for (auto [ofs, size] : {std::pair<uint32_t, uint32_t>{general_, generalSize_}, {storage_, storageSize_}})
+        // Beide Hälften bekommen denselben Inhalt (jede mit eigenem Zähler und eigener Prüfsumme): HeartGold/
+        // SoulSilver schreibt beim Speichern nur geänderte Boxen in die andere Hälfte und verlässt sich darauf,
+        // dass der Rest dort schon stimmt. Sonst ist der PC-Block danach dort beschädigt (2026-11-08, Modul).
+        for (auto [ofs, size] : {std::pair<uint32_t, uint32_t>{general_, generalSize_}, {storage_, storageSize_}}) {
+            uint32_t other = ofs >= PARTITION ? ofs - PARTITION : ofs + PARTITION;
+            std::memcpy(&data_[other], &data_[ofs], size - 0x14); // ohne Fuß (Zähler ab Ende − 0x14)
             wr16(&data_[ofs + size - 2], crc16Ccitt(&data_[ofs], size - footer_));
+            wr16(&data_[other + size - 2], crc16Ccitt(&data_[other], size - footer_));
+        }
         return;
     }
     // Gen 5: geänderte Blöcke (Boxen, Inventar, Team, Trainer, Geld) + Prüfsummentabelle
