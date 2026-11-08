@@ -16,7 +16,8 @@ bool init(std::string& err);
 void exit();
 
 // Neueste Version (Tag ohne „v“, z. B. „0.3.0“); false bei Fehler.
-bool latestVersion(std::string& version, std::string& err);
+// timeoutSec > 0: Gesamtzeit begrenzen (Prüfung beim Start soll nicht lange aufhalten).
+bool latestVersion(std::string& version, std::string& err, long timeoutSec = 0);
 
 // a < b? (Versionsnummern „x.y.z“)
 bool isNewer(const std::string& candidate, const std::string& installed);

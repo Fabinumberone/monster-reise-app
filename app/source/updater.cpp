@@ -17,6 +17,7 @@ static const char* CIA_LATEST = "https://github.com/Fabinumberone/monster-reise-
 static const char* USER_AGENT = "MonsterReiseApp/" APP_VERSION;
 static constexpr u32 SOC_SIZE = 0x100000;
 
+static std::string g_assetUrl; // API-Adresse der CIA im neuesten Release (aus latestVersion)
 static u32* g_soc = nullptr;
 static bool g_curl = false;
 
@@ -81,9 +82,13 @@ static size_t toString(char* p, size_t size, size_t n, void* user) {
     return size * n;
 }
 
-bool latestVersion(std::string& version, std::string& err) {
+bool latestVersion(std::string& version, std::string& err, long timeoutSec) {
     CURL* c = makeHandle(API_LATEST);
     if (!c) { err = "curl nicht verfügbar."; return false; }
+    if (timeoutSec > 0) {
+        curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, timeoutSec);
+        curl_easy_setopt(c, CURLOPT_TIMEOUT, timeoutSec);
+    }
     std::string body;
     char eb[CURL_ERROR_SIZE] = {};
     curl_slist* h = curl_slist_append(nullptr, "Accept: application/vnd.github+json");
@@ -103,6 +108,19 @@ bool latestVersion(std::string& version, std::string& err) {
     if (b == std::string::npos) { err = "Antwort von GitHub unverständlich."; return false; }
     version = body.substr(a + 1, b - a - 1);
     if (!version.empty() && (version[0] == 'v' || version[0] == 'V')) version.erase(0, 1);
+    // API-Adresse der CIA: im Asset-Objekt steht "url" vor "name"
+    g_assetUrl.clear();
+    size_t n = body.find("\"name\":\"monster-reise-app.cia\"");
+    if (n == std::string::npos) n = body.find("\"name\": \"monster-reise-app.cia\"");
+    if (n != std::string::npos) {
+        size_t u = body.rfind("\"url\":", n);
+        size_t q1 = u == std::string::npos ? u : body.find('"', u + 6);
+        size_t q2 = q1 == std::string::npos ? q1 : body.find('"', q1 + 1);
+        if (q2 != std::string::npos) {
+            std::string url = body.substr(q1 + 1, q2 - q1 - 1);
+            if (url.rfind("https://api.github.com/repos/Fabinumberone/monster-reise-app/releases/assets/", 0) == 0) g_assetUrl = url;
+        }
+    }
     return true;
 }
 
@@ -155,31 +173,43 @@ bool downloadAndInstall(const std::function<void(double, double)>& progress, std
     if (R_FAILED(amInit())) { err = "Installationsdienst (AM) nicht verfügbar."; return false; }
     Install in;
     in.progress = &progress;
-    Result r = AM_StartCiaInstall(MEDIATYPE_SD, &in.h);
-    if (R_FAILED(r)) {
-        amExit();
-        char b[80];
-        std::snprintf(b, sizeof b, "Installation konnte nicht starten (0x%08lX).", static_cast<unsigned long>(r));
-        err = b;
-        return false;
-    }
-    CURL* c = makeHandle(CIA_LATEST);
-    char eb[CURL_ERROR_SIZE] = {};
-    CURLcode cr = CURLE_FAILED_INIT;
-    if (c) {
-        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, toCia);
-        curl_easy_setopt(c, CURLOPT_WRITEDATA, &in);
-        curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
-        curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, onProgress);
-        curl_easy_setopt(c, CURLOPT_XFERINFODATA, &in);
-        curl_easy_setopt(c, CURLOPT_ERRORBUFFER, eb);
-        curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 128L * 1024L);
-        cr = curl_easy_perform(c);
-        curl_easy_cleanup(c);
-    }
-    if (cr != CURLE_OK || in.offset < 0x2020) {
+    // Zwei Wege: erst über die API (Datei-Adresse aus latestVersion), dann über den direkten Link.
+    // (2026-11-08: github.com/…/releases/download lieferte stundenlang 504, die API funktionierte.)
+    std::vector<std::pair<std::string, bool>> sources;
+    if (!g_assetUrl.empty()) sources.push_back({g_assetUrl, true});
+    sources.push_back({CIA_LATEST, false});
+    Result r = 0;
+    bool done = false;
+    for (auto& [url, api] : sources) {
+        in = Install{};
+        in.progress = &progress;
+        r = AM_StartCiaInstall(MEDIATYPE_SD, &in.h);
+        if (R_FAILED(r)) {
+            amExit();
+            char b[80];
+            std::snprintf(b, sizeof b, "Installation konnte nicht starten (0x%08lX).", static_cast<unsigned long>(r));
+            err = b;
+            return false;
+        }
+        CURL* c = makeHandle(url.c_str());
+        char eb[CURL_ERROR_SIZE] = {};
+        CURLcode cr = CURLE_FAILED_INIT;
+        curl_slist* h = api ? curl_slist_append(nullptr, "Accept: application/octet-stream") : nullptr;
+        if (c) {
+            if (h) curl_easy_setopt(c, CURLOPT_HTTPHEADER, h);
+            curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, toCia);
+            curl_easy_setopt(c, CURLOPT_WRITEDATA, &in);
+            curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+            curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, onProgress);
+            curl_easy_setopt(c, CURLOPT_XFERINFODATA, &in);
+            curl_easy_setopt(c, CURLOPT_ERRORBUFFER, eb);
+            curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 128L * 1024L);
+            cr = curl_easy_perform(c);
+            curl_easy_cleanup(c);
+        }
+        if (h) curl_slist_free_all(h);
+        if (cr == CURLE_OK && in.offset >= 0x2020) { done = true; break; }
         AM_CancelCIAInstall(in.h);
-        amExit();
         if (in.err) {
             char b[80];
             std::snprintf(b, sizeof b, "Schreiben fehlgeschlagen (0x%08lX).", static_cast<unsigned long>(in.err));
@@ -187,6 +217,10 @@ bool downloadAndInstall(const std::function<void(double, double)>& progress, std
         } else {
             err = cr == CURLE_ABORTED_BY_CALLBACK ? "Abgebrochen." : curlError(cr, eb);
         }
+        if (cr == CURLE_ABORTED_BY_CALLBACK || in.err) break; // nicht noch einmal versuchen
+    }
+    if (!done) {
+        amExit();
         return false;
     }
     r = AM_FinishCiaInstall(in.h); // prüft die CIA; bei Fehler bleibt die alte Version

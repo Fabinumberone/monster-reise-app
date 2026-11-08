@@ -146,6 +146,7 @@ struct State {
     bool dupeShiny = false;               // „Doppelte“: schillernde Pokémon einbeziehen
     std::string updVersion;              // neueste Version auf GitHub
     bool updDone = false;                 // Update installiert
+    bool updStartup = false;              // Prüfung beim Start (vor dem Auslesen)
     int releaseStep = 0;                  // Entlassen: 0 erste Frage, 1 zweite Bestätigung (mit Y)
     std::string bankErr;
     std::vector<SaveSlot> installed;
@@ -291,7 +292,6 @@ void commit(State& st, bool sync) {
 // Beim Start: alle Spielstände lesen, Änderungen übernehmen, alle aktualisieren (world.hpp).
 void loadState(State& st) {
     mkdir(DIR, 0777);
-    if (FILE* f = std::fopen(LOGFILE, "w")) std::fclose(f);
     setWorldLog(logLine);
     logLine("Start");
     g_names.load(NAMES);
@@ -622,7 +622,7 @@ void drawList(const State& st) {
 void drawTop(const State& st) {
     drawHeader(st);
     if (st.loading) {
-        text("Lese Spielstände …", 200, 110, 0.6f, C_LIGHT, CENTER);
+        text(st.updStartup ? "Suche nach Updates …" : "Lese Spielstände …", 200, 110, 0.6f, C_LIGHT, CENTER);
         return;
     }
     if (!st.bankOk) {
@@ -924,6 +924,39 @@ void doLaunch(State& st) {
 }
 
 // ---------- Update ----------
+// Beim Start, vor dem Auslesen der Spielstände (Wunsch des Nutzers): kurz nach einer neuen Version
+// suchen. Ohne WLAN oder bei Fehlern still weiter (nur Protokoll). Gibt es eine, fragt die App.
+void input(State& st, u32 down, const touchPosition& t);
+
+void startupUpdateCheck(State& st) {
+    mkdir(DIR, 0777);
+    if (FILE* f = std::fopen(LOGFILE, "w")) std::fclose(f); // Protokoll je Start neu
+    st.updStartup = true;
+    render(st);
+    std::string err;
+    if (!updater::init(err) || !updater::latestVersion(st.updVersion, err, 10)) {
+        logLine("Update-Prüfung beim Start: " + err);
+        st.updStartup = false;
+        return;
+    }
+    logLine("Update-Prüfung beim Start: installiert " APP_VERSION ", GitHub " + st.updVersion);
+    if (updater::isNewer(st.updVersion, APP_VERSION)) {
+        st.updDone = false;
+        st.screen = Screen::Update;
+        // Eigene kleine Schleife, bis installiert (App endet) oder „Später“ (weiter zum Auslesen)
+        while (aptMainLoop() && !st.quit && st.screen != Screen::Menu) {
+            hidScanInput();
+            u32 down = hidKeysDown();
+            touchPosition t{};
+            if (down & KEY_TOUCH) hidTouchRead(&t);
+            if (down) input(st, down, t);
+            render(st);
+        }
+    }
+    st.screen = Screen::Menu;
+    st.updStartup = false;
+}
+
 void checkUpdate(State& st) {
     if (st.dirty) {
         st.message = "Erst Änderungen übernehmen\nUmräumen oder Entlassen ist noch nicht gespeichert.\nBitte erst spielen oder beenden („Übernehmen“).";
@@ -1234,6 +1267,8 @@ int main() {
     State st;
     g_state = &st;
     render(st); // leerer Rahmen während des Ladens
+    startupUpdateCheck(st);
+    if (st.quit || !aptMainLoop()) { updater::exit(); C2D_TextBufDelete(g_buf); C2D_Fini(); C3D_Fini(); gfxExit(); return 0; }
     loadState(st);
 
     while (aptMainLoop() && !st.quit) {
