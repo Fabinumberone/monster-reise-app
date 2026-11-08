@@ -123,7 +123,13 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error, Update };
+enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error, Update, Backups };
+
+// Ein Sicherungsstand: alle Dateien mit derselben Zeit (ein Abgleich bzw. ein Schreibvorgang)
+struct BackupSet {
+    std::string stamp;               // „20261108-102205“
+    std::vector<std::string> files;  // Dateinamen in sicherungen/
+};
 enum class View { Team, PC, Bag, List };
 
 // Liste: alle Pokémon nach Nationaldex-Nummer gruppiert (Positionen wie State::held).
@@ -147,6 +153,9 @@ struct State {
     std::string updVersion;              // neueste Version auf GitHub
     bool updDone = false;                 // Update installiert
     bool updStartup = false;              // Prüfung beim Start (vor dem Auslesen)
+    std::vector<BackupSet> backups;       // Sicherungen, neueste zuerst
+    int bkSel = 0, bkScroll = 0, bkStep = 0; // 0 Liste, 1 Frage, 2 zweite Bestätigung, 3 erledigt
+    std::vector<std::string> bkResult;
     int releaseStep = 0;                  // Entlassen: 0 erste Frage, 1 zweite Bestätigung (mit Y)
     std::string bankErr;
     std::vector<SaveSlot> installed;
@@ -220,6 +229,16 @@ void pruneBackups(const std::string& what) {
     std::sort(names.begin(), names.end());
     for (size_t i = 0; i + KEEP < names.size(); i++) std::remove((std::string(BACKUPS) + "/" + names[i]).c_str());
 }
+
+constexpr int BK_ROWS = 6;
+
+// „20261108-102205“ -> „08.11.2026 10:22:05“
+std::string stampLabel(const std::string& s) {
+    if (s.size() < 15) return s;
+    return s.substr(6, 2) + "." + s.substr(4, 2) + "." + s.substr(0, 4) + " " + s.substr(9, 2) + ":" + s.substr(11, 2) + ":" + s.substr(13, 2);
+}
+// Was gesichert wurde („Platin-005a Pokemon Platin (DE).sav“, „speicher.bin“)
+std::string backupWhat(const std::string& file) { return file.size() > 16 ? file.substr(16) : file; }
 
 bool backupFile(const char* stamp, const std::string& what, const std::vector<u8>& data) {
     std::string p = std::string(BACKUPS) + "/" + stamp + "-" + what;
@@ -657,7 +676,7 @@ void button(const Button& b, const std::string& label, u32 bg, u32 fg, float siz
 }
 
 const Button B_TRAVEL{8, 32, 304, 44}, B_TEAM{8, 82, 148, 42}, B_PC{164, 82, 148, 42}, B_BAG{8, 128, 148, 42}, B_LIST{164, 128, 148, 42};
-const Button B_EXIT{164, 196, 148, 36}, B_UPDATE{8, 196, 148, 36}, B_BACK{8, 200, 304, 32};
+const Button B_EXIT{216, 196, 96, 36}, B_UPDATE{8, 196, 96, 36}, B_BACKUPS{112, 196, 96, 36}, B_BACK{8, 200, 304, 32};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 const Button B_SHINY{8, 140, 304, 36};
 const Button B_YES2{164, 186, 148, 46}, B_NO2{8, 186, 148, 46}; // zweite Bestätigung: Seiten getauscht
@@ -714,8 +733,9 @@ void drawBottom(const State& st) {
         button(B_BAG, "Beutel", st.view == View::Bag ? C_SEL : C_BG2, st.view == View::Bag ? C_TEXT : C_WHITE, 0.7f);
         button(B_LIST, "Liste", st.view == View::List ? C_SEL : C_BG2, st.view == View::List ? C_TEXT : C_WHITE, 0.7f);
         text("X: Spielen  Y: Ansicht  L/R: Box  A: umräumen", 160, 178, 0.4f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
-        button(B_UPDATE, "Update", C_BG2, C_LIGHT, 0.55f);
-        button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.55f);
+        button(B_UPDATE, "Update", C_BG2, C_LIGHT, 0.5f);
+        button(B_BACKUPS, "Sicherungen", C_BG2, C_LIGHT, 0.45f);
+        button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.5f);
         break;
     case Screen::Done: break;
     case Screen::Info: {
@@ -829,6 +849,54 @@ void drawBottom(const State& st) {
         button(B_YES, "Starten (A)", C_OK, C_WHITE, 0.55f);
         button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.55f);
         break;
+    case Screen::Backups: {
+        text("Sicherungen", 160, 4, 0.6f, C_WHITE, CENTER);
+        if (st.bkStep == 3) {
+            float y = 34;
+            for (size_t i = 0; i < st.bkResult.size() && i < 8; i++, y += 17) text(st.bkResult[i], 8, y, 0.4f, C_WHITE, LEFT, 304);
+            button(B_BACK, "Beenden (A)", C_OK, C_WHITE, 0.55f);
+            break;
+        }
+        if (st.backups.empty()) {
+            text("Noch keine Sicherungen vorhanden.", 160, 90, 0.5f, C_WHITE, CENTER);
+            button(B_BACK, "Zurück (B)", C_BG2, C_WHITE, 0.55f);
+            break;
+        }
+        const BackupSet& b = st.backups[size_t(st.bkSel)];
+        if (st.bkStep == 0) {
+            for (int r = 0; r < BK_ROWS; r++) {
+                int i = st.bkScroll + r;
+                if (i >= int(st.backups.size())) break;
+                const BackupSet& x = st.backups[size_t(i)];
+                float y = 30 + r * 24;
+                rect(8, y, 304, 22, i == st.bkSel ? C_SEL : C_BG2);
+                u32 c = i == st.bkSel ? C_TEXT : C_WHITE;
+                text(stampLabel(x.stamp), 14, y + 3, 0.45f, c);
+                text(std::to_string(x.files.size()) + (x.files.size() == 1 ? " Datei" : " Dateien"), 306, y + 4, 0.4f, c, RIGHT);
+            }
+            text("A: zurückspielen   ▲▼ wählen", 160, 176, 0.4f, C_LIGHT, CENTER);
+            button(B_UP, "▲", C_BG2, C_WHITE, 0.6f);
+            button(B_DOWN, "▼", C_BG2, C_WHITE, 0.6f);
+            button(B_BACK_MID, "Zurück (B)", C_BG2, C_WHITE, 0.5f);
+            break;
+        }
+        text("Stand vor dem " + stampLabel(b.stamp), 160, 30, 0.5f, C_WHITE, CENTER, 300);
+        float y = 52;
+        for (size_t i = 0; i < b.files.size() && i < 6; i++, y += 15) text(backupWhat(b.files[i]), 160, y, 0.38f, C_LIGHT, CENTER, 300);
+        if (b.files.size() > 6) text("… und " + std::to_string(b.files.size() - 6) + " weitere", 160, y, 0.38f, C_LIGHT, CENTER);
+        if (st.bkStep == 1) {
+            text("Diese Dateien zurückschreiben? Der jetzige Stand wird vorher", 160, 150, 0.38f, C_WHITE, CENTER, 304);
+            text("gesichert. Danach wird die App beendet.", 160, 164, 0.38f, C_WHITE, CENTER, 304);
+            button(B_YES, "Zurückspielen (A)", C_ERR, C_WHITE, 0.45f);
+            button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.5f);
+        } else {
+            rect(0, 150, 320, 30, C_ERR);
+            text("Sicher? Zum Bestätigen Y drücken", 160, 156, 0.5f, C_WHITE, CENTER, 300);
+            button(B_YES2, "Ja, zurück (Y)", C_ERR, C_WHITE, 0.5f);
+            button(B_NO2, "Abbrechen (B)", C_BG2, C_WHITE, 0.5f);
+        }
+        break;
+    }
     case Screen::Update: {
         text("Update", 160, 4, 0.6f, C_WHITE, CENTER);
         if (st.updDone) {
@@ -921,6 +989,80 @@ void doLaunch(State& st) {
                      ? std::string("Alles aktuell\nStarte jetzt ") + launcherName(*st.target) + " und lade\n" + gameTitle(*st.target->game) + "."
                      : std::string("Spiel konnte nicht gestartet werden\nBitte starte ") + st.target->label() + " selbst.";
     st.screen = Screen::Error;
+}
+
+// ---------- Sicherungen zurückspielen ----------
+void openBackups(State& st) {
+    st.backups.clear();
+    std::map<std::string, std::vector<std::string>> byStamp;
+    if (::DIR* d = opendir(BACKUPS)) {
+        while (dirent* e = readdir(d)) {
+            std::string n = e->d_name;
+            if (n.size() > 16 && n[8] == '-' && n[15] == '-') byStamp[n.substr(0, 15)].push_back(n);
+        }
+        closedir(d);
+    }
+    for (auto it = byStamp.rbegin(); it != byStamp.rend(); ++it) {
+        std::sort(it->second.begin(), it->second.end());
+        st.backups.push_back({it->first, it->second});
+    }
+    st.bkSel = st.bkScroll = st.bkStep = 0;
+    st.bkResult.clear();
+    st.screen = Screen::Backups;
+}
+
+// Ziel einer Sicherung: Speicher oder ein Spielstand (über Name + Datei, wie beim Sichern)
+const SaveSlot* backupSlot(const State& st, const std::string& what) {
+    for (auto& s : st.installed)
+        if (s.label() + "-" + saveName(*s.game) == what) return &s;
+    return nullptr;
+}
+
+void restoreBackup(State& st) {
+    const BackupSet set = st.backups[size_t(st.bkSel)];
+    st.message = "Spiele Sicherung zurück …";
+    st.screen = Screen::Busy;
+    render(st);
+    // Erst alles einlesen (das Sichern des jetzigen Stands kann alte Sicherungen löschen)
+    struct Item { std::string what; std::vector<u8> data; const SaveSlot* slot; bool bank; };
+    std::vector<Item> items;
+    std::vector<std::string> res;
+    for (const std::string& file : set.files) {
+        Item it{backupWhat(file), {}, nullptr, false};
+        it.bank = it.what == "speicher.bin";
+        if (!it.bank) it.slot = backupSlot(st, it.what);
+        if (!it.bank && !it.slot) { res.push_back(it.what + ": Spielstand nicht gefunden, übersprungen"); continue; }
+        if (!readFileAll((std::string(BACKUPS) + "/" + file).c_str(), it.data)) { res.push_back(it.what + ": nicht lesbar"); continue; }
+        items.push_back(std::move(it));
+    }
+    char stamp[32];
+    timeStamp(stamp, sizeof stamp);
+    int ok = 0;
+    for (Item& it : items) {
+        std::vector<u8> cur;
+        std::string err;
+        bool have = it.bank ? readFileAll(BANK, cur) : readSave(*it.slot, cur, err);
+        if (have && !backupFile(stamp, it.what, cur)) { res.push_back(it.what + ": jetziger Stand nicht sicherbar, übersprungen"); continue; }
+        bool w = false;
+        if (it.bank) {
+            if (FILE* f = std::fopen(BANK, "wb")) {
+                w = std::fwrite(it.data.data(), 1, it.data.size(), f) == it.data.size();
+                w = (std::fclose(f) == 0) && w;
+            }
+        } else {
+            w = writeSave(*it.slot, it.data, err);
+        }
+        logLine(std::string("Sicherung ") + set.stamp + " zurück: " + it.what + (w ? " ok" : " FEHLER " + err));
+        if (w) ok++;
+        else res.push_back(it.what + ": Schreiben fehlgeschlagen " + err);
+    }
+    res.insert(res.begin(), std::to_string(ok) + " von " + std::to_string(set.files.size()) + " Dateien zurückgespielt (Stand " + stampLabel(set.stamp) + ").");
+    res.push_back("Der vorherige Stand ist als neue Sicherung abgelegt.");
+    res.push_back("Die App wird beendet. Beim nächsten Start wird abgeglichen.");
+    st.bkResult = res;
+    st.bkStep = 3;
+    st.dirty = false; // Speicher im Arbeitsspeicher ist veraltet: nichts mehr schreiben
+    st.screen = Screen::Backups;
 }
 
 // ---------- Update ----------
@@ -1173,6 +1315,31 @@ void input(State& st, u32 down, const touchPosition& t) {
         else if ((touch && B_SHINY.hit(t)) || (down & KEY_X)) st.dupeShiny = !st.dupeShiny;
         else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
         break;
+    case Screen::Backups:
+        if (st.bkStep == 3) { if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.quit = true; break; }
+        if (st.backups.empty()) { if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.screen = Screen::Menu; break; }
+        if (st.bkStep == 0) {
+            int n = int(st.backups.size());
+            if ((down & KEY_DDOWN) || (touch && B_DOWN.hit(t))) st.bkSel = std::min(n - 1, st.bkSel + 1);
+            if ((down & KEY_DUP) || (touch && B_UP.hit(t))) st.bkSel = std::max(0, st.bkSel - 1);
+            if (st.bkSel < st.bkScroll) st.bkScroll = st.bkSel;
+            if (st.bkSel >= st.bkScroll + BK_ROWS) st.bkScroll = st.bkSel - BK_ROWS + 1;
+            if (down & KEY_A) st.bkStep = 1;
+            else if ((down & KEY_B) || (touch && B_BACK_MID.hit(t))) st.screen = Screen::Menu;
+            else if (touch)
+                for (int r = 0; r < BK_ROWS; r++)
+                    if (Button{8, float(30 + r * 24), 304, 22}.hit(t) && st.bkScroll + r < n) {
+                        if (st.bkSel == st.bkScroll + r) st.bkStep = 1;
+                        st.bkSel = st.bkScroll + r;
+                    }
+        } else if (st.bkStep == 1) {
+            if ((touch && B_YES.hit(t)) || (down & KEY_A)) st.bkStep = 2;
+            else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.bkStep = 0;
+        } else {
+            if ((touch && B_YES2.hit(t)) || (down & KEY_Y)) restoreBackup(st);
+            else if ((touch && B_NO2.hit(t)) || (down & KEY_B)) st.bkStep = 0;
+        }
+        break;
     case Screen::Update:
         if (st.updDone) { if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.quit = true; }
         else if (updater::isNewer(st.updVersion, APP_VERSION)) {
@@ -1205,6 +1372,7 @@ void input(State& st, u32 down, const touchPosition& t) {
         else if (touch && B_LIST.hit(t)) openList(st);
         else if (touch && B_EXIT.hit(t)) requestQuit(st);
         else if (touch && B_UPDATE.hit(t)) checkUpdate(st);
+        else if (touch && B_BACKUPS.hit(t)) openBackups(st);
         break;
     case Screen::Travel: {
         if (st.travelRegion < 0) {
