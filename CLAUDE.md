@@ -117,6 +117,19 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 - `pw3d-reise selbsttest` läuft durch: CRC-Testvektoren und PK6-Rundlauf (verschlüsseln/entschlüsseln) stimmen. Ob die Blocktabelle (Vertauschungstabelle der Blöcke A–D eingeschlossen) zu echten Daten passt, zeigt erst ein echter Spielstand.
 
 ## Nächste Schritte
+**Vorhaben (mit dem Nutzer abgestimmt 2026-11-08, Reihenfolge nach Vorschlag):**
+1. Pension/Resort u. Ä. auslesen: Pokémon dort dürfen beim Abgleich nicht als freigelassen gelten (derzeit Datenverlust-Risiko); mindestens Rückfrage statt sofort löschen.
+2. Sicherungen in der App zurückspielen (Seite „Sicherungen“, je Spielstand die letzten 10 mit Datum).
+3. Abgleich-Seite blätterbar, Zusammenfassung („2 neu in Platin, Karnimani hat sich entwickelt“), Meldungen auch ins Protokoll.
+4. Suche/Filter in der Liste (Name, schillernd, hier nicht sichtbar, Level).
+5. Detailansicht: in welchen Generationen sichtbar, und warum nicht.
+6. Pokédex-Übersicht über alle Spiele (fehlende Arten), später mit Fangorten aus eigenen Dumps (nur SD).
+7. „Reisen“ im Spiel (3GX/Code-Patch), z. B. Eintrag am PC im Pokémon-Center.
+8. Reisetagebuch (automatisches Logbuch: Regionen, Fänge, Entwicklungen).
+9. Trainerpass über alle Regionen (Orden, Spielzeit, Arten; nur lesend).
+10. Reise-Optik: eigene Weltkarte, Übergang „Fähre nach …“, Bordkarte (nur eigene Grafik).
+11. **Tauschentwicklung in der App** (statt „Tausch mit sich selbst“): Option „Entwickeln“ für Pokémon, die sich durch Tausch entwickeln (mit/ohne Item, Item wird verbraucht; Laukaps/Schnuthelm nur gemeinsam), Entwicklungsdaten aus dem eigenen UM-Dump (a/0/1/4) in arten.bin.
+
 1. Echte Spielstände von Omega Rubin und X aus Azahar holen (nach `saves/`, ignoriert), `info`/`scan` laufen lassen, Offsets bestätigen bzw. korrigieren.
 2. Geld, Bag und Spielzeit bestätigen; Übertragung ORAS ↔ XY inkl. Trainer-ID; Rundlauf testen (übertragen, im Spiel laden, speichern, zurück).
 3. Gen 7 (USUM): Blocktabelle, Prüfsummen, Signatur (siehe PKHeX `MemeCrypto`), PK7, Umwandlung, Platzhalter, gemeinsamer Speicher.
