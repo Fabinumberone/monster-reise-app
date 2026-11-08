@@ -31,7 +31,7 @@ include $(DEVKITARM)/3ds_rules
 #     - icon.png
 #     - <libctru folder>/default_icon.png
 #---------------------------------------------------------------------------------
-TARGET		:=	pw3d-reise
+TARGET		:=	monster-reise-app
 BUILD		:=	build
 SOURCES		:=	source ../core
 DATA		:=	data
@@ -40,8 +40,8 @@ GRAPHICS	:=	gfx
 GFXBUILD	:=	$(BUILD)
 #ROMFS		:=	romfs
 ICON		:=	assets/icon.png
-APP_TITLE	:=	Pokémon World 3DS
-APP_DESCRIPTION	:=	Reise zwischen den Regionen
+APP_TITLE	:=	Monster Reise App
+APP_DESCRIPTION	:=	Ein Spielstand für alle Regionen
 APP_AUTHOR	:=	Fabi
 #GFXBUILD	:=	$(ROMFS)/gfx
 

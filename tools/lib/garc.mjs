@@ -2,9 +2,10 @@
 import fs from 'node:fs';
 
 /** Liest ein GARC und gibt pro Eintrag die Unterdateien als Buffer zurück */
+// file: Pfad oder bereits gelesener Buffer
 export function readGarc(file) {
-  const b = fs.readFileSync(file);
-  if (b.toString('latin1', 0, 4) !== 'CRAG') throw new Error(`${file}: kein GARC`);
+  const b = Buffer.isBuffer(file) ? file : fs.readFileSync(file);
+  if (b.toString('latin1', 0, 4) !== 'CRAG') throw new Error(`${Buffer.isBuffer(file) ? 'GARC' : file}: kein GARC`);
   const headerSize = b.readUInt32LE(4);
   const dataOff = b.readUInt32LE(0x10);
   let p = headerSize;

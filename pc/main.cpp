@@ -477,7 +477,7 @@ static bool writeGB(const std::string& path, SaveGB& s) {
 }
 
 static int cmdReise(const char* bankPath, const char* fromArg, const char* toArg) {
-    if (!g_species.loaded()) { std::fprintf(stderr, "arten.bin fehlt (tools/gen-arten.mjs)\n"); return 1; }
+    if (!g_species.loaded()) { std::fprintf(stderr, "arten.bin fehlt (tools/daten.mjs)\n"); return 1; }
     Bank bank;
     bank.species = &g_species;
     std::string err;

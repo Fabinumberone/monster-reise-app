@@ -1,4 +1,4 @@
-// PC-Symbole der Pokémon aus icons.bin (erzeugt von tools/gen-icons.mjs aus dem eigenen
+// PC-Symbole der Pokémon aus icons.bin (erzeugt von tools/daten.mjs aus dem eigenen
 // Ultramond-Dump, liegt nur auf der SD).
 //
 // icons.bin Version 2: "PW3DICON", u32 2, u16 Arten, u16 Symbole, u32 Offset[Arten+1],
@@ -26,6 +26,6 @@ private:
     std::vector<C3D_Tex*> tex_;
     std::vector<C2D_Image> img_;
     // Ausschnitt mit oben > unten (sonst deutet citro2d die Textur als um 90° gedreht).
-    // Die erste Speicherzeile liegt bei v = 1, daher legt gen-icons.mjs die obere Bildzeile zuerst ab.
+    // Die erste Speicherzeile liegt bei v = 1, daher legt tools/lib/monsterdaten.mjs die obere Bildzeile zuerst ab.
     Tex3DS_SubTexture sub_{40, 30, 12.0f / 64, 1.0f, 52.0f / 64, 1.0f - 30.0f / 32};
 };

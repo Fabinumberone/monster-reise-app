@@ -1,4 +1,4 @@
-// Pokémon World 3DS – Reise-App mit grafischer Oberfläche (citro2d, Systemschrift).
+// Monster Reise App – Reise-App mit grafischer Oberfläche (citro2d, Systemschrift).
 // Oben: Kopf mit Trainer und Region, darunter Team, PC oder Beutel.
 // Unten: Touch-Menü, Regionswahl und Reiseablauf.
 // Tasten: Steuerkreuz bewegt die Auswahl oben (Team/PC/Beutel), L/R wechselt die Box,
@@ -451,7 +451,7 @@ std::string money(u32 v) { // 99999 -> 99.999
 // ---------- Oberer Bildschirm ----------
 void drawHeader(const State& st) {
     rect(0, 0, 400, 26, C_HEAD);
-    text("Pokémon World 3DS", 8, 4, 0.6f, C_WHITE);
+    text("Monster Reise App", 8, 4, 0.6f, C_WHITE);
     if (st.current) {
         u32 rc = regionColor(st.current->game->region);
         std::string r = std::string(st.current->game->region) + " · " + st.current->label();

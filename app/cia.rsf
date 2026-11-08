@@ -1,7 +1,7 @@
-# RSF für die Reise-App als .cia (makerom). Angelehnt an die Vorlage von Checkpoint,
+# RSF für die Monster Reise App als .cia (makerom). Angelehnt an die Vorlage von Checkpoint,
 # aber ohne Kernel-/Debug-Systemaufrufe und ohne NAND-Zugriff.
 BasicInfo:
-  Title                   : PW3DS
+  Title                   : MRAPP
   ProductCode             : CTR-H-PW3D
   Logo                    : Homebrew
 

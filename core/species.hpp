@@ -1,4 +1,4 @@
-// Artdaten aus arten.bin (siehe tools/gen-arten.mjs) und Berechnungen, die sie brauchen:
+// Artdaten aus arten.bin (siehe tools/daten.mjs) und Berechnungen, die sie brauchen:
 // Erfahrungskurven, Werte in Gen 1/2 und Gen 7.
 #pragma once
 #include <array>

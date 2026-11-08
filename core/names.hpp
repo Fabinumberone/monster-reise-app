@@ -1,4 +1,4 @@
-// Deutsche Namen für Pokémon, Items und Attacken aus namen.txt (erzeugt von tools/gen-namen.mjs
+// Deutsche Namen für Pokémon, Items und Attacken aus namen.txt (erzeugt von tools/daten.mjs
 // aus dem eigenen Dump, liegt nur auf der SD). Fehlt die Datei, liefern die Funktionen Nummern.
 #pragma once
 #include <cstdint>
