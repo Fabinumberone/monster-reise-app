@@ -33,6 +33,21 @@ bool SpeciesData::load(const std::string& path) {
         std::memcpy(i.base7.data(), p + 20, 6);
         if (rec >= 28) i.family = uint16_t(p[26] | (p[27] << 8));
     }
+    // Version 3: dahinter „TRDE“, u16 Anzahl, je 8 Byte (u16 Art, u8 Methode, u8 0, u16 Parameter, u16 Ziel)
+    trades_.clear();
+    size_t o = 16 + size_t(count + 1) * rec;
+    if (d.size() >= o + 6 && std::memcmp(&d[o], "TRDE", 4) == 0) {
+        size_t n = size_t(d[o + 4] | (d[o + 5] << 8));
+        o += 6;
+        for (size_t k = 0; k < n && o + 8 <= d.size(); k++, o += 8) {
+            TradeEvo t;
+            t.species = uint16_t(d[o] | (d[o + 1] << 8));
+            t.method = d[o + 2];
+            t.param = uint16_t(d[o + 4] | (d[o + 5] << 8));
+            t.target = uint16_t(d[o + 6] | (d[o + 7] << 8));
+            trades_.push_back(t);
+        }
+    }
     return true;
 }
 

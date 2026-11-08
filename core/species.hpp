@@ -20,6 +20,12 @@ struct SpeciesInfo {
     uint16_t family = 0;            // Grundart der Entwicklungsreihe (0 = unbekannt)
 };
 
+// Tauschentwicklung (arten.bin, Abschnitt „TRDE“): 5 Tausch, 6 mit Item (param), 7 gegen Art
+struct TradeEvo {
+    uint16_t species = 0, param = 0, target = 0;
+    uint8_t method = 0;
+};
+
 class SpeciesData {
 public:
     bool load(const std::string& path);
@@ -27,9 +33,12 @@ public:
     const SpeciesInfo& get(uint16_t s) const { return s < info_.size() ? info_[s] : empty_; }
     // Grundart der Entwicklungsreihe (Pichu für Raichu); die Art selbst, wenn unbekannt.
     uint16_t family(uint16_t s) const { uint16_t f = get(s).family; return f ? f : s; }
+    // leer, wenn arten.bin älter ist (dann mit dem Daten-Werkzeug neu erzeugen)
+    const std::vector<TradeEvo>& tradeEvos() const { return trades_; }
 
 private:
     std::vector<SpeciesInfo> info_;
+    std::vector<TradeEvo> trades_;
     SpeciesInfo empty_;
 };
 

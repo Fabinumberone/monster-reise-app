@@ -48,6 +48,8 @@ export function buildNamen(g) {
 //   Gen 2: u8 KP, Ang, Ver, Init, SpAng, SpVer,
 //   Gen 7: u8 KP, Ang, Ver, Init, SpAng, SpVer (Basiswerte),
 //   u16 Familie (Grundart der Entwicklungsreihe, aus der Entwicklungstabelle a/0/1/4).
+// Version 3 hängt an: "TRDE", u16 Anzahl, je 8 Byte Tauschentwicklung
+//   (u16 Art, u8 Methode 5 Tausch / 6 mit Item / 7 gegen Art, u8 0, u16 Parameter, u16 Zielart).
 const REC = 28;
 const G1 = Buffer.from([1, 45, 49, 49, 45, 65, 0x16, 0x03, 45, 64]);
 const G2 = Buffer.from([1, 45, 49, 49, 45, 65, 65, 0x16, 0x03, 45, 64]);
@@ -79,6 +81,14 @@ export function buildArten(g, roms, log = () => {}) {
       if (e.readUInt16LE(0) && t && t <= SPECIES && t !== s && !parent[t]) parent[t] = s;
     }
   const family = s => { let f = s, n = 0; while (parent[f] && n++ < 5) f = parent[f]; return f; };
+  const trades = [];
+  for (let s = 1; s <= SPECIES; s++)
+    for (let i = 0; i < 8; i++) {
+      const e = evo[s][0].subarray(i * 8, i * 8 + 8);
+      const m = e.readUInt16LE(0), t = e.readUInt16LE(4);
+      if (m >= 5 && m <= 7 && t && t <= SPECIES) trades.push([s, m, e.readUInt16LE(2), t]);
+    }
+  if (trades.length < 20) throw new Error('Tauschentwicklungen nicht gefunden');
   if (family(3) !== 1 || family(26) !== 172 || family(186) !== 60) throw new Error('Entwicklungstabelle passt nicht');
 
   let gen1 = null, gen2 = null;
@@ -92,7 +102,7 @@ export function buildArten(g, roms, log = () => {}) {
 
   const out = Buffer.alloc(16 + (SPECIES + 1) * REC);
   out.write('PW3DARTN', 0, 'latin1');
-  out.writeUInt32LE(2, 8);
+  out.writeUInt32LE(3, 8);
   out.writeUInt16LE(SPECIES, 12);
   out.writeUInt16LE(REC, 14);
   for (let s = 1; s <= SPECIES; s++) {
@@ -113,7 +123,13 @@ export function buildArten(g, roms, log = () => {}) {
       gen2.data.copy(out, o + 14, e + 1, e + 7);
     }
   }
-  return { data: out, gen1: !!gen1, gen2: !!gen2 };
+  const tr = Buffer.alloc(6 + trades.length * 8);
+  tr.write('TRDE', 0, 'latin1');
+  tr.writeUInt16LE(trades.length, 4);
+  trades.forEach(([s, m, p, t], k) => {
+    tr.writeUInt16LE(s, 6 + k * 8); tr[8 + k * 8] = m; tr.writeUInt16LE(p, 10 + k * 8); tr.writeUInt16LE(t, 12 + k * 8);
+  });
+  return { data: Buffer.concat([out, tr]), gen1: !!gen1, gen2: !!gen2, trades: trades.length };
 }
 
 // ------------------------------------------------------------------------------------ icons.bin

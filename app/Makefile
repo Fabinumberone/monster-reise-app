@@ -46,7 +46,11 @@ APP_AUTHOR	:=	Fabi
 # Version: bei jedem Release erhöhen (Tag vX.Y.Z, der Updater vergleicht damit)
 VERSION_MAJOR	:=	0
 VERSION_MINOR	:=	5
-VERSION_MICRO	:=	0
+VERSION_MICRO	:=	1
+# Titelversion der CIA: muss bei jedem Release steigen, sonst lehnt der 3DS das Update ab (0xD8E08027).
+# makerom übernimmt nur Major (·1024) und Micro, Minor wird verworfen (getestet 2026-11-08). Daher:
+# CIA-Major = Hauptversion·10 + Minor (höchstens 63), CIA-Micro = Micro (höchstens 15).
+CIA_MAJOR	:=	$(shell echo $$(( $(VERSION_MAJOR) * 10 + $(VERSION_MINOR) )))
 #GFXBUILD	:=	$(ROMFS)/gfx
 
 #---------------------------------------------------------------------------------
@@ -180,7 +184,7 @@ cia: all
 	@# Icon: das SMDH von smdhtool (bannertool makesmdh scheitert unter Windows am „é“)
 	@$(CIATOOLS)/makerom.exe -f cia -o $(TARGET).cia -target t -exefslogo -elf $(TARGET).elf -rsf cia.rsf \
 		-banner $(BUILD)/banner.bnr -icon $(TARGET).smdh \
-		-major $(VERSION_MAJOR) -minor $(VERSION_MINOR) -micro $(VERSION_MICRO)
+		-major $(CIA_MAJOR) -micro $(VERSION_MICRO)
 	@echo built ... $(TARGET).cia
 
 $(BUILD):
