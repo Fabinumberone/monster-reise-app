@@ -45,8 +45,8 @@ APP_DESCRIPTION	:=	Ein Spielstand für alle Regionen
 APP_AUTHOR	:=	Fabi
 # Version: bei jedem Release erhöhen (Tag vX.Y.Z, der Updater vergleicht damit)
 VERSION_MAJOR	:=	0
-VERSION_MINOR	:=	4
-VERSION_MICRO	:=	1
+VERSION_MINOR	:=	5
+VERSION_MICRO	:=	0
 #GFXBUILD	:=	$(ROMFS)/gfx
 
 #---------------------------------------------------------------------------------

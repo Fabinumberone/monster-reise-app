@@ -130,7 +130,7 @@ struct BackupSet {
     std::string stamp;               // „20261108-102205“
     std::vector<std::string> files;  // Dateinamen in sicherungen/
 };
-enum class View { Team, PC, Bag, List, Dex };
+enum class View { Team, PC, Bag, List, Dex, Journal };
 
 // Liste: alle Pokémon nach Nationaldex-Nummer gruppiert (Positionen wie State::held).
 struct ListGroup {
@@ -159,6 +159,8 @@ struct State {
     std::vector<u16> dexMissing;          // Pokédex: fehlende Arten
     int dexOwned[8] = {};                 // je Generation (Index 1–7), [0] gesamt
     int dexScroll = 0;
+    std::vector<std::string> journal;     // Reisetagebuch (neueste zuerst)
+    int journalScroll = 0;
     bool detail = false;                  // Liste: Detailansicht des gewählten Pokémon
     std::vector<std::pair<std::string, std::string>> detailRows; // Spiel, Ergebnis
     int listFilter = 0;                   // Liste: Filter (siehe FILTERS)
@@ -222,6 +224,35 @@ void logLine(const std::string& s) {
         std::fclose(f);
     }
 }
+
+// Reisetagebuch (Wunsch des Nutzers): automatisches Logbuch, eine Zeile je Ereignis
+// „TT.MM.JJJJ HH:MM  Text“, höchstens JOURNAL_MAX Zeilen (älteste fallen weg).
+const char* JOURNAL = "sdmc:/pokemon-world-3d/tagebuch.txt";
+constexpr size_t JOURNAL_MAX = 2000;
+
+void journalAdd(const std::vector<std::string>& lines) {
+    if (lines.empty()) return;
+    std::vector<std::string> all;
+    if (FILE* f = std::fopen(JOURNAL, "r")) {
+        char buf[512];
+        while (std::fgets(buf, sizeof buf, f)) {
+            std::string l = buf;
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            if (!l.empty()) all.push_back(l);
+        }
+        std::fclose(f);
+    }
+    std::time_t now = std::time(nullptr);
+    char stamp[32];
+    std::strftime(stamp, sizeof stamp, "%d.%m.%Y %H:%M", std::localtime(&now));
+    for (const std::string& l : lines) all.push_back(std::string(stamp) + "  " + l);
+    size_t from = all.size() > JOURNAL_MAX ? all.size() - JOURNAL_MAX : 0;
+    if (FILE* f = std::fopen(JOURNAL, "w")) {
+        for (size_t i = from; i < all.size(); i++) { std::fputs(all[i].c_str(), f); std::fputc('\n', f); }
+        std::fclose(f);
+    }
+}
+void journalAdd(const std::string& line) { journalAdd(std::vector<std::string>{line}); }
 
 // Sicherungen: höchstens KEEP je Spielstand (Dateiname „<Zeit>-<was>“, nach Zeit sortiert).
 constexpr int KEEP = 10;
@@ -321,6 +352,7 @@ void commit(State& st, bool sync) {
         st.notice.push_back("bis sie wieder auftauchen. Freigelassen? Dann in der Liste entlassen.");
     }
     for (auto& l : st.notice) logLine("Bericht: " + l);
+    journalAdd(rep.details);
     st.infoScroll = 0;
 }
 
@@ -768,6 +800,22 @@ void drawDex(const State& st) {
     text("▲▼ blättern   Y: weiter", 392, 226, 0.36f, C_LIGHT, RIGHT);
 }
 
+constexpr int JOURNAL_ROWS = 11;
+void drawJournal(const State& st) {
+    text("Reisetagebuch", 8, 30, 0.5f, C_WHITE);
+    text(std::to_string(st.journal.size()) + " Einträge", 392, 32, 0.4f, C_LIGHT, RIGHT);
+    if (st.journal.empty()) { text("Noch keine Einträge.", 200, 120, 0.5f, C_LIGHT, CENTER); return; }
+    for (int r = 0; r < JOURNAL_ROWS && st.journalScroll + r < int(st.journal.size()); r++) {
+        const std::string& l = st.journal[size_t(st.journalScroll + r)];
+        float y = 50 + float(r) * 15.5f;
+        if (l.size() > 18 && l[16] == ' ' && l[17] == ' ') {
+            text(l.substr(0, 16), 8, y, 0.34f, C_LIGHT);
+            text(l.substr(18), 92, y, 0.38f, C_WHITE, LEFT, 300);
+        } else text(l, 8, y, 0.38f, C_WHITE, LEFT, 384);
+    }
+    text("Steuerkreuz: blättern   Y: weiter", 392, 226, 0.36f, C_LIGHT, RIGHT);
+}
+
 void drawTop(const State& st) {
     drawHeader(st);
     if (st.loading) {
@@ -785,6 +833,7 @@ void drawTop(const State& st) {
     case View::Bag: drawBag(st); break;
     case View::List: drawList(st); break;
     case View::Dex: drawDex(st); break;
+    case View::Journal: drawJournal(st); break;
     }
     if (st.held >= 0 && (st.view == View::Team || st.view == View::PC)) {
         rect(0, 222, 400, 18, C_HEAD);
@@ -1113,6 +1162,7 @@ void startTravel(State& st) {
 
 // Gewähltes Spiel starten; Umräumen/Entlassen vorher in alle Spielstände schreiben.
 void doLaunch(State& st) {
+    journalAdd("Reise nach " + gameTitle(*st.target->game) + (st.target->cart() ? " (Modul)" : "") + ", " + st.target->game->region);
     if (st.dirty) {
         st.notice.clear();
         st.message = "Schreibe Spielstände …";
@@ -1378,6 +1428,22 @@ void openDex(State& st) {
     st.view = View::Dex;
 }
 
+void openJournal(State& st) {
+    st.journal.clear();
+    if (FILE* f = std::fopen(JOURNAL, "r")) {
+        char buf[512];
+        while (std::fgets(buf, sizeof buf, f)) {
+            std::string l = buf;
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            if (!l.empty()) st.journal.push_back(l);
+        }
+        std::fclose(f);
+    }
+    std::reverse(st.journal.begin(), st.journal.end()); // neueste zuerst
+    st.journalScroll = 0;
+    st.view = View::Journal;
+}
+
 void openList(State& st) {
     st.detail = false;
     st.held = -1;
@@ -1412,6 +1478,7 @@ void release(State& st) {
         for (size_t i = 0; i < st.list.size(); i++)
             if (st.list[i].species == sp) { st.listOpen = int(i); st.listSel = int(i); }
     if (st.listOpen >= 0) st.entrySel = std::min(st.entrySel, int(st.list[size_t(st.listOpen)].pos.size()) - 1);
+    journalAdd(std::to_string(n) + " Pokémon entlassen");
     st.notice = {std::to_string(n) + (n == 1 ? " Pokémon entlassen." : " Pokémon entlassen."), "Beim Spielen oder Beenden werden alle Spielstände aktualisiert.",
                  "Versehen? Beim Beenden „Verwerfen“ wählen, dann bleibt alles wie vorher."};
     st.infoScroll = 0;
@@ -1501,6 +1568,13 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (down & KEY_DDOWN) st.teamCursor = (st.teamCursor + 2) % Bank::PARTY;
             if (down & KEY_DUP) st.teamCursor = (st.teamCursor + Bank::PARTY - 2) % Bank::PARTY;
         }
+        if (st.view == View::Journal) {
+            int maxScroll = std::max(0, int(st.journal.size()) - JOURNAL_ROWS);
+            if (down & KEY_DDOWN) st.journalScroll = std::min(maxScroll, st.journalScroll + 1);
+            if (down & KEY_DUP) st.journalScroll = std::max(0, st.journalScroll - 1);
+            if (down & KEY_DRIGHT) st.journalScroll = std::min(maxScroll, st.journalScroll + JOURNAL_ROWS);
+            if (down & KEY_DLEFT) st.journalScroll = std::max(0, st.journalScroll - JOURNAL_ROWS);
+        }
         if (st.view == View::Dex) {
             int rows = (int(st.dexMissing.size()) + DEX_COLS - 1) / DEX_COLS;
             int maxScroll = std::max(0, rows - DEX_ROWS);
@@ -1517,6 +1591,7 @@ void input(State& st, u32 down, const touchPosition& t) {
         if (down & KEY_Y) {
             if (st.view == View::Bag) openList(st);
             else if (st.view == View::List) openDex(st);
+            else if (st.view == View::Dex) openJournal(st);
             else st.view = st.view == View::Team ? View::PC : st.view == View::PC ? View::Bag : View::Team;
         }
     }
