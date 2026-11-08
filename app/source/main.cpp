@@ -685,7 +685,7 @@ void button(const Button& b, const std::string& label, u32 bg, u32 fg, float siz
 }
 
 const Button B_TRAVEL{8, 32, 304, 44}, B_TEAM{8, 82, 148, 42}, B_PC{164, 82, 148, 42}, B_BAG{8, 128, 148, 42}, B_LIST{164, 128, 148, 42};
-const Button B_EXIT{216, 196, 96, 36}, B_UPDATE{8, 196, 96, 36}, B_BACKUPS{112, 196, 96, 36}, B_BACK{8, 200, 304, 32};
+const Button B_SAVE{8, 196, 72, 36}, B_UPDATE{84, 196, 72, 36}, B_BACKUPS{160, 196, 76, 36}, B_EXIT{240, 196, 72, 36}, B_BACK{8, 200, 304, 32};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 const Button B_SHINY{8, 140, 304, 36};
 const Button B_YES2{164, 186, 148, 46}, B_NO2{8, 186, 148, 46}; // zweite Bestätigung: Seiten getauscht
@@ -741,10 +741,11 @@ void drawBottom(const State& st) {
         button(B_PC, "PC", st.view == View::PC ? C_SEL : C_BG2, st.view == View::PC ? C_TEXT : C_WHITE, 0.7f);
         button(B_BAG, "Beutel", st.view == View::Bag ? C_SEL : C_BG2, st.view == View::Bag ? C_TEXT : C_WHITE, 0.7f);
         button(B_LIST, "Liste", st.view == View::List ? C_SEL : C_BG2, st.view == View::List ? C_TEXT : C_WHITE, 0.7f);
-        text("X: Spielen  Y: Ansicht  L/R: Box  A: umräumen", 160, 178, 0.4f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
-        button(B_UPDATE, "Update", C_BG2, C_LIGHT, 0.5f);
-        button(B_BACKUPS, "Sicherungen", C_BG2, C_LIGHT, 0.45f);
-        button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.5f);
+        text("X: Spielen  Y: Ansicht  L/R: Box  A: umräumen  SELECT: Speichern", 160, 178, 0.4f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
+        button(B_SAVE, "Speichern", st.dirty ? C_SEL : C_BG2, st.dirty ? C_TEXT : C_LIGHT, 0.42f);
+        button(B_UPDATE, "Update", C_BG2, C_LIGHT, 0.45f);
+        button(B_BACKUPS, "Sicherungen", C_BG2, C_LIGHT, 0.38f);
+        button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.45f);
         break;
     case Screen::Done: break;
     case Screen::Info: {
@@ -1160,6 +1161,26 @@ void installUpdate(State& st) {
     st.screen = Screen::Update;
 }
 
+// Speichern (Wunsch des Nutzers): gemeinsamen Speicher und alle Spielstände jetzt schreiben (mit
+// Sicherung), ohne die App zu beenden.
+void saveAll(State& st) {
+    if (!st.bankOk || !st.synced) {
+        st.message = "Speichern nicht möglich\nDer Abgleich beim Start war nicht vollständig.";
+        st.screen = Screen::Error;
+        return;
+    }
+    st.held = -1;
+    st.notice.clear();
+    st.message = "Schreibe Speicher und Spielstände …";
+    st.screen = Screen::Busy;
+    render(st);
+    commit(st, false);
+    if (st.notice.empty()) st.notice.push_back("Gespeichert – alle Spielstände waren schon aktuell.");
+    else st.notice.insert(st.notice.begin(), "Gespeichert.");
+    st.infoScroll = 0;
+    st.screen = Screen::Info;
+}
+
 void requestQuit(State& st) {
     if (st.dirty) st.screen = Screen::SaveMoves;
     else st.quit = true;
@@ -1397,6 +1418,7 @@ void input(State& st, u32 down, const touchPosition& t) {
         else if (touch && B_BAG.hit(t)) st.view = View::Bag;
         else if (touch && B_LIST.hit(t)) openList(st);
         else if (touch && B_EXIT.hit(t)) requestQuit(st);
+        else if ((touch && B_SAVE.hit(t)) || (st.view != View::List && (down & KEY_SELECT))) saveAll(st);
         else if (touch && B_UPDATE.hit(t)) checkUpdate(st);
         else if (touch && B_BACKUPS.hit(t)) openBackups(st);
         break;
