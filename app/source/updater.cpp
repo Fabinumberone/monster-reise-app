@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <malloc.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -142,95 +143,95 @@ bool isNewer(const std::string& candidate, const std::string& installed) {
     return parts(candidate) > parts(installed);
 }
 
-struct Install {
-    Handle h = 0;
-    u64 offset = 0;
-    Result err = 0;
+struct Download {
+    std::vector<u8> data;
+    bool tooBig = false;
     const std::function<void(double, double)>* progress;
     u64 lastDraw = 0;
 };
 
-static size_t toCia(char* p, size_t size, size_t n, void* user) {
-    auto* in = static_cast<Install*>(user);
-    u32 written = 0;
-    Result r = FSFILE_Write(in->h, &written, in->offset, p, u32(size * n), 0);
-    if (R_FAILED(r) || written != size * n) { in->err = R_FAILED(r) ? r : -1; return 0; }
-    in->offset += written;
+static size_t toMemory(char* p, size_t size, size_t n, void* user) {
+    auto* d = static_cast<Download*>(user);
+    if (d->data.size() + size * n > 64u * 1024 * 1024) { d->tooBig = true; return 0; } // eine CIA dieser App ist ~1–2 MB
+    d->data.insert(d->data.end(), p, p + size * n);
     return size * n;
 }
 
 static int onProgress(void* user, curl_off_t total, curl_off_t now, curl_off_t, curl_off_t) {
-    auto* in = static_cast<Install*>(user);
+    auto* d = static_cast<Download*>(user);
     u64 t = osGetTime();
-    if (t - in->lastDraw >= 100 || (total && now == total)) { // höchstens 10 Bilder je Sekunde
-        in->lastDraw = t;
-        (*in->progress)(double(now), double(total));
+    if (t - d->lastDraw >= 100 || (total && now == total)) { // höchstens 10 Bilder je Sekunde
+        d->lastDraw = t;
+        (*d->progress)(double(now), double(total));
     }
     return aptMainLoop() ? 0 : 1; // beim Schließen über HOME abbrechen
 }
 
+static std::string hexErr(const char* what, Result r) {
+    char b[96];
+    std::snprintf(b, sizeof b, "%s (0x%08lX).", what, static_cast<unsigned long>(r));
+    return b;
+}
+
+// Erst vollständig in den Speicher laden, dann wie FBI in festen Blöcken installieren: Der
+// Installationsdienst lehnt Schreibgrößen ab, wie sie gerade aus dem Netz kommen (0xE0E083F2,
+// „misaligned size“, 2026-11-08). So beginnt die Installation auch erst nach vollständigem Download.
 bool downloadAndInstall(const std::function<void(double, double)>& progress, std::string& err) {
-    if (R_FAILED(amInit())) { err = "Installationsdienst (AM) nicht verfügbar."; return false; }
-    Install in;
-    in.progress = &progress;
     // Zwei Wege: erst über die API (Datei-Adresse aus latestVersion), dann über den direkten Link.
     // (2026-11-08: github.com/…/releases/download lieferte stundenlang 504, die API funktionierte.)
     std::vector<std::pair<std::string, bool>> sources;
     if (!g_assetUrl.empty()) sources.push_back({g_assetUrl, true});
     sources.push_back({CIA_LATEST, false});
-    Result r = 0;
-    bool done = false;
+    Download dl;
+    dl.progress = &progress;
+    bool ok = false;
     for (auto& [url, api] : sources) {
-        in = Install{};
-        in.progress = &progress;
-        r = AM_StartCiaInstall(MEDIATYPE_SD, &in.h);
-        if (R_FAILED(r)) {
-            amExit();
-            char b[80];
-            std::snprintf(b, sizeof b, "Installation konnte nicht starten (0x%08lX).", static_cast<unsigned long>(r));
-            err = b;
-            return false;
-        }
+        dl.data.clear();
+        dl.tooBig = false;
         CURL* c = makeHandle(url.c_str());
         char eb[CURL_ERROR_SIZE] = {};
         CURLcode cr = CURLE_FAILED_INIT;
         curl_slist* h = api ? curl_slist_append(nullptr, "Accept: application/octet-stream") : nullptr;
         if (c) {
             if (h) curl_easy_setopt(c, CURLOPT_HTTPHEADER, h);
-            curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, toCia);
-            curl_easy_setopt(c, CURLOPT_WRITEDATA, &in);
+            curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, toMemory);
+            curl_easy_setopt(c, CURLOPT_WRITEDATA, &dl);
             curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
             curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, onProgress);
-            curl_easy_setopt(c, CURLOPT_XFERINFODATA, &in);
+            curl_easy_setopt(c, CURLOPT_XFERINFODATA, &dl);
             curl_easy_setopt(c, CURLOPT_ERRORBUFFER, eb);
             curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 128L * 1024L);
             cr = curl_easy_perform(c);
             curl_easy_cleanup(c);
         }
         if (h) curl_slist_free_all(h);
-        if (cr == CURLE_OK && in.offset >= 0x2020) { done = true; break; }
-        AM_CancelCIAInstall(in.h);
-        if (in.err) {
-            char b[80];
-            std::snprintf(b, sizeof b, "Schreiben fehlgeschlagen (0x%08lX).", static_cast<unsigned long>(in.err));
-            err = b;
-        } else {
-            err = cr == CURLE_ABORTED_BY_CALLBACK ? "Abgebrochen." : curlError(cr, eb);
+        if (cr == CURLE_OK && dl.data.size() >= 0x2020 && dl.data[0] == 0x20 && dl.data[1] == 0x20) { ok = true; break; }
+        if (cr == CURLE_OK) err = "Download ist keine CIA.";
+        else if (dl.tooBig) err = "Download zu groß.";
+        else err = cr == CURLE_ABORTED_BY_CALLBACK ? "Abgebrochen." : curlError(cr, eb);
+        if (cr == CURLE_ABORTED_BY_CALLBACK) return false;
+    }
+    if (!ok) return false;
+
+    if (R_FAILED(amInit())) { err = "Installationsdienst (AM) nicht verfügbar."; return false; }
+    Handle hnd = 0;
+    Result r = AM_StartCiaInstall(MEDIATYPE_SD, &hnd);
+    if (R_FAILED(r)) { amExit(); err = hexErr("Installation konnte nicht starten", r); return false; }
+    constexpr u32 CHUNK = 0x20000;
+    for (u64 off = 0; off < dl.data.size(); off += CHUNK) {
+        u32 n = u32(std::min<u64>(CHUNK, dl.data.size() - off)), written = 0;
+        r = FSFILE_Write(hnd, &written, off, dl.data.data() + off, n, 0);
+        if (R_FAILED(r) || written != n) {
+            AM_CancelCIAInstall(hnd);
+            amExit();
+            err = hexErr("Schreiben fehlgeschlagen", R_FAILED(r) ? r : -1);
+            return false;
         }
-        if (cr == CURLE_ABORTED_BY_CALLBACK || in.err) break; // nicht noch einmal versuchen
+        progress(double(off + n), double(dl.data.size()));
     }
-    if (!done) {
-        amExit();
-        return false;
-    }
-    r = AM_FinishCiaInstall(in.h); // prüft die CIA; bei Fehler bleibt die alte Version
+    r = AM_FinishCiaInstall(hnd); // prüft die CIA; bei Fehler bleibt die alte Version
     amExit();
-    if (R_FAILED(r)) {
-        char b[80];
-        std::snprintf(b, sizeof b, "Installation fehlgeschlagen (0x%08lX).", static_cast<unsigned long>(r));
-        err = b;
-        return false;
-    }
+    if (R_FAILED(r)) { err = hexErr("Installation fehlgeschlagen", r); return false; }
     return true;
 }
 
