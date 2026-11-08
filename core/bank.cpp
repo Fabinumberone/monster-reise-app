@@ -1178,9 +1178,25 @@ IntegrateResult Bank::integrateNDS(const SaveNDS& sav, const NDSContext& ctxIn, 
 
 // ---------- Items, Geld, Trainer beim Schreiben ----------
 
+// Alle PC-Boxen freischalten (Wunsch des Nutzers): sonst liegen Pokémon in noch gesperrten Boxen
+// unsichtbar im Spielstand. Stellen nach PKHeX BoxLayout6/7 (Block „BOX“, Anzahl freigeschaltet).
+void unlockAllBoxes(SaveFile& sav) {
+    auto& d = sav.raw();
+    switch (sav.kind()) {
+    case GameKind::XY:
+    case GameKind::ORAS:
+        d[0x4400 + 0x43E] = 31;
+        d[0x4400 + 0x43D] |= 0x80; // letzte Box freigeschaltet
+        break;
+    case GameKind::SM: d[0x4800 + 0x5E1] = 32; break;
+    case GameKind::USUM: d[0x4C00 + 0x5E1] = 32; break;
+    }
+}
+
 void Bank::writeMeta(SaveFile& sav) {
     GameKind k = sav.kind();
     (void)k;
+    unlockAllBoxes(sav);
     // Items und Geld
     std::vector<ItemStack> stacks;
     for (auto& b : items) stacks.push_back({b.item, uint16_t(std::min<uint32_t>(b.count, 0xFFFF))});
@@ -1265,6 +1281,7 @@ void Bank::writeMetaGBA(SaveGBA& sav) {
 }
 
 void Bank::writeMetaNDS(SaveNDS& sav) {
+    sav.unlockAllBoxes();
     // Items: nicht reisende Items bleiben, dann reisende nach Rangfolge in ihre Tasche
     using P = SaveNDS::Pouch;
     // Nicht reisende Items bleiben; mehrfache Stapel desselben Items werden zusammengefasst (räumt Taschen
@@ -1979,7 +1996,7 @@ struct WorldImpl {
         if (before.species() != after.species() && before.species() && after.species())
             rep.details.push_back(where + ": " + nm.species(before.species()) + " hat sich zu " + nm.species(after.species()) + " entwickelt");
         int lb = levelOfPk(before), la = levelOfPk(after);
-        if (la > lb) rep.details.push_back(where + ": " + nm.species(after.species()) + " Lv. " + std::to_string(lb) + " → " + std::to_string(la));
+        if (la > lb) rep.details.push_back(where + ": " + nm.species(after.species()) + " von Lv. " + std::to_string(lb) + " auf " + std::to_string(la));
     }
 
     uint32_t expOf(WorldSave& w, const GameMon& g) {

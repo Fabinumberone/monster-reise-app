@@ -607,7 +607,7 @@ void drawTeam(const State& st) {
 }
 
 void drawPC(const State& st) {
-    text("◀  Box " + std::to_string(st.box + 1) + "  ▶", 146, 48, 0.55f, C_WHITE, CENTER);
+    text("<  Box " + std::to_string(st.box + 1) + "  >", 146, 48, 0.55f, C_WHITE, CENTER); // ◀▶ fehlen in der Systemschrift
     bool boxHidden = st.current && !slotVisibleHere(st, st.box * Bank::SLOTS);
     text(boxHidden ? "nur im Speicher (L / R)" : "L / R", 146, 66, 0.38f, boxHidden ? C_SEL : C_LIGHT, CENTER);
     for (int s = 0; s < Bank::SLOTS; s++) {
@@ -690,7 +690,7 @@ void drawList(const State& st) {
             for (int p : g.pos) mk += int(st.marked.count(p));
             if (mk) text(std::to_string(mk) + " markiert", 330, y + 1, 0.4f, C_ERR, RIGHT);
         }
-        if (st.marked.empty()) text("A: öffnen  ▲▼◀▶ blättern  L: Filter  R: Suche  SELECT: Doppelte", 392, 226, 0.34f, C_LIGHT, RIGHT, 384);
+        if (st.marked.empty()) text("A: öffnen  Steuerkreuz: blättern  L: Filter  R: Suche  SELECT: Doppelte", 392, 226, 0.34f, C_LIGHT, RIGHT, 384);
         else text("A: öffnen   SELECT: " + std::to_string(st.marked.size()) + " markierte entlassen   X: Markierungen löschen", 392, 226, 0.36f, C_ERR, RIGHT, 384);
         return;
     }

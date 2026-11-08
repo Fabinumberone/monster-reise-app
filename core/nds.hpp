@@ -95,6 +95,8 @@ public:
     void setParty(const std::vector<PK45>& mons);
     void setBoxSlot(int box, int slot, const PK45* pk); // nullptr = leer
     void setPouch(Pouch p, const std::vector<NDSItem>& items);
+    // Gen 5: alle 24 Boxen freischalten (Gen 4 hat alle Boxen von Anfang an)
+    void unlockAllBoxes();
     void setMoney(uint32_t v);
     void setTrainer(const std::string& name, uint16_t tid, uint16_t sid, uint8_t gender);
     // Pokédex: gefangen, gesehen (Geschlecht, Gen 5 auch Schillern), Sprache (nach PKHeX Zukan4/Zukan5).

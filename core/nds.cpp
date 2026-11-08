@@ -295,6 +295,10 @@ void SaveNDS::setPouch(Pouch p, const std::vector<NDSItem>& items) {
     }
 }
 
+void SaveNDS::unlockAllBoxes() {
+    if (generation() == 5) data_[0x3DD] = 24; // PKHeX BoxLayout5 (Block 0)
+}
+
 void SaveNDS::setMoney(uint32_t v) {
     v = std::min<uint32_t>(v, 999999);
     if (generation() == 4) wr32(&data_[trainerOfs() + 0x14], v);
@@ -373,6 +377,7 @@ void SaveNDS::finalize() {
     uint32_t table = bw ? 0x23F00 : 0x25F00, tlen = bw ? 0x8C : 0x94;
     struct B { uint32_t ofs, len; int idx; };
     std::vector<B> blocks;
+    blocks.push_back({0x0, 0x3E0, 0}); // Boxnamen und freigeschaltete Boxen
     for (int i = 0; i < 24; i++) blocks.push_back({0x400 + uint32_t(i) * 0x1000, 0xFF0, i + 1});
     blocks.push_back({0x18400, bw ? 0x9C0u : 0x9ECu, 25});
     blocks.push_back({0x18E00, 0x534, 26});
