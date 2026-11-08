@@ -319,6 +319,13 @@ void commit(State& st, bool sync) {
     mkdir(BACKUPS, 0777);
     char stamp[32];
     timeStamp(stamp, sizeof stamp);
+    // Ungültig gelesene Spielstände zur Untersuchung ablegen (werden nicht geschrieben)
+    for (size_t i = 0; i < st.saves.size(); i++) {
+        if (st.saves[i].ok || before[i].empty()) continue;
+        std::string what = "ungueltig-" + st.installed[i].label() + "-" + saveName(*st.installed[i].game);
+        logLine("ungültig gelesen, abgelegt als " + std::string(stamp) + "-" + what + " (" + std::to_string(before[i].size()) + " Byte)");
+        backupFile(stamp, what, before[i]);
+    }
     int written = 0;
     for (size_t i = 0; i < st.saves.size(); i++) {
         WorldSave& w = st.saves[i];
