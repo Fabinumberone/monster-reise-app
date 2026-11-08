@@ -147,6 +147,8 @@ AccessControlInfo:
    - hid:USER
    - ndm:u
    - ptm:u
+   - pxi:dev
+   - ns:s
    - soc:U
 
 SystemControlInfo:

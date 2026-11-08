@@ -298,6 +298,7 @@ void loadState(State& st) {
     g_species.load(SPECIES);
     g_icons.load(ICONS);
     st.installed = findSaves();
+    logLine(cartInfo());
     st.current = nullptr;
     st.bank = Bank{};
     st.bank.species = &g_species;

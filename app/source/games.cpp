@@ -5,12 +5,14 @@
 #include <dirent.h>
 
 #include <cstdio>
+#include <cstring>
 #include <deque>
 
 #include "gba.hpp"
 #include "gbaconvert.hpp"
 #include "nds.hpp"
 #include "ndsconvert.hpp"
+#include "ndscard.hpp"
 
 using pw3d::GameKind;
 
@@ -34,6 +36,11 @@ const std::vector<Game>& allGames() {
     };
     return games;
 }
+
+namespace {
+constexpr const char* CART_PREFIX = "dscard/"; // saveFile von DS-Modulen (kein echter Pfad)
+std::string g_cardInfo;
+} // namespace
 
 const std::vector<Game>& fileGames() {
     static std::vector<Game> games;
@@ -101,8 +108,48 @@ const std::vector<Game>& fileGames() {
         }
         closedir(d);
     }
+    // DS-Modul im Schacht (Gen 4/5): Spielstand direkt vom Modul (ndscard)
+    ndscard::Info card = ndscard::probe();
+    g_cardInfo = card.present ? std::string("DS-Modul ") + card.gameCode : "DS-Modul: " + card.error;
+    std::vector<u8> data;
+    std::string err;
+    if (card.present && ndscard::read(data, err)) {
+        pw3d::SaveNDS s;
+        if (s.load(data, err)) {
+            std::string path = std::string(CART_PREFIX) + card.gameCode + ".sav";
+            char lang = card.gameCode[3];
+            const char* name = "?";
+            const char* region = "Sinnoh";
+            const char* kind = "NDS-Pt";
+            u8 ver = 0;
+            std::string c3(card.gameCode, 3);
+            if (c3 == "ADA") { name = "Diamant"; kind = "NDS-DP"; ver = 10; }
+            else if (c3 == "APA") { name = "Perl"; kind = "NDS-DP"; ver = 11; }
+            else if (c3 == "CPU") { name = "Platin"; ver = 12; }
+            else if (c3 == "IPK") { name = "HeartGold"; region = "Johto"; kind = "NDS-HGSS"; ver = 7; }
+            else if (c3 == "IPG") { name = "SoulSilver"; region = "Johto"; kind = "NDS-HGSS"; ver = 8; }
+            else if (c3 == "IRA") { name = "Weiß"; region = "Einall"; kind = "NDS-BW"; ver = 20; }
+            else if (c3 == "IRB") { name = "Schwarz"; region = "Einall"; kind = "NDS-BW"; ver = 21; }
+            else if (c3 == "IRD") { name = "Weiß 2"; region = "Einall"; kind = "NDS-B2W2"; ver = 22; }
+            else if (c3 == "IRE") { name = "Schwarz 2"; region = "Einall"; kind = "NDS-B2W2"; ver = 23; }
+            u32 h = 2166136261u;
+            for (unsigned char c : path) h = (h ^ c) * 16777619u;
+            Game game{keep(lang == 'D' ? std::string(name) : std::string(name) + " (" + lang + ")"), region, h | 0x80000000u,
+                      s.generation(), GameKind::XY, keep(path), 5, ver};
+            game.kindName = kind;
+            game.sub = u8(s.game());
+            games.push_back(game);
+        } else {
+            g_cardInfo += ": " + err;
+        }
+    } else if (card.present) {
+        g_cardInfo += ": " + err;
+    }
     return games;
 }
+
+bool isDsCart(const Game& g) { return isFileGame(g) && !std::strncmp(g.saveFile, CART_PREFIX, std::strlen(CART_PREFIX)); }
+const std::string& cartInfo() { return g_cardInfo; }
 
 std::string saveName(const Game& g) {
     std::string s = g.saveFile;
@@ -171,12 +218,13 @@ std::vector<SaveSlot> findSaves() {
         if (archiveHasFile(g, MEDIATYPE_SD)) out.push_back({&g, MEDIATYPE_SD});
         if (g.gen >= 6 && archiveHasFile(g, MEDIATYPE_GAME_CARD)) out.push_back({&g, MEDIATYPE_GAME_CARD});
     }
-    for (auto& g : fileGames()) out.push_back({&g, MEDIATYPE_SD});
+    for (auto& g : fileGames()) out.push_back({&g, isDsCart(g) ? MEDIATYPE_GAME_CARD : MEDIATYPE_SD});
     return out;
 }
 
 bool readSave(const SaveSlot& s, std::vector<u8>& out, std::string& err) {
     const Game& g = *s.game;
+    if (isDsCart(g)) return ndscard::read(out, err);
     if (isFileGame(g) || (!s.cart() && emuExists(g))) {
         FILE* f = std::fopen(isFileGame(g) ? g.saveFile : emuPath(g).c_str(), "rb");
         if (!f) { err = s.label() + ": Spielstand nicht lesbar"; return false; }
@@ -207,6 +255,7 @@ bool readSave(const SaveSlot& s, std::vector<u8>& out, std::string& err) {
 
 bool writeSave(const SaveSlot& s, const std::vector<u8>& data, std::string& err) {
     const Game& g = *s.game;
+    if (isDsCart(g)) return ndscard::write(data, err);
     if (isFileGame(g) || (!s.cart() && emuExists(g))) {
         FILE* f = std::fopen(isFileGame(g) ? g.saveFile : emuPath(g).c_str(), "r+b"); // vorhandene Datei überschreiben
         if (!f) { err = "Kann Spielstand nicht öffnen"; return false; }
@@ -279,12 +328,14 @@ const char* dsGameCode(u8 version) {
 } // namespace
 
 const char* launcherName(const SaveSlot& s) {
+    if (isDsCart(*s.game)) return nullptr;
     if (s.game->gen == 3) return "mGBA";
     if (s.game->gen == 4 || s.game->gen == 5) return "TWiLight Menu++";
     return nullptr;
 }
 
 bool launchGame(const SaveSlot& s) {
+    if (isDsCart(*s.game)) return ndscard::launch();
     if (s.game->gen == 3) return titleInstalled(MGBA, MEDIATYPE_SD) && launchTitle(MGBA, MEDIATYPE_SD);
     if (s.game->gen == 4 || s.game->gen == 5) {
         if (const char* c = dsGameCode(s.game->gbVersion)) {

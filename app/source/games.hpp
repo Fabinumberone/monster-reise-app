@@ -36,6 +36,10 @@ inline bool isFileGame(const Game& g) { return g.gen >= 3 && g.gen <= 5; }
 // Spielstände von mGBA (sdmc:/mGBA/*.sav, Gen 3) und TWiLight Menu++ (sdmc:/roms/nds favoriten/saves,
 // sdmc:/roms/nds/saves, Gen 4/5). lowId ist ein Hash des Pfads (Bit 31 gesetzt).
 const std::vector<Game>& fileGames();
+// Spielstand liegt auf einem DS-Modul im Schacht (Gen 4/5, siehe ndscard.hpp).
+bool isDsCart(const Game& g);
+// Ergebnis der Modulprüfung für das Protokoll („DS-Modul IPKD“, „DS-Modul: kein Modul“ …).
+const std::string& cartInfo();
 // Dateiname des Spielstands (für Sicherungen).
 std::string saveName(const Game& g);
 
