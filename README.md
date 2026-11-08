@@ -33,10 +33,11 @@ Getestet mit den deutschen Fassungen auf einem New 2DS XL (Luma3DS) und in Azaha
 ## Installation
 
 1. Voraussetzung: 3DS mit Luma3DS und FBI.
-2. Die `monster-reise-app.cia` aus dem neuesten
-   [Release](../../releases/latest) installieren. Am einfachsten geht das in FBI mit
-   „Remote Install → Scan QR Code“ und dem QR-Code des Download-Links. Updates werden genauso
-   installiert; Speicher und Spielstände bleiben dabei erhalten.
+2. Die `monster-reise-app.cia` aus dem neuesten [Release](../../releases/latest) installieren.
+   Am einfachsten in FBI mit „Remote Install → Scan QR Code“ und einem QR-Code dieses Links, der
+   immer auf die neueste Version zeigt:
+   `https://github.com/Fabinumberone/monster-reise-app/releases/latest/download/monster-reise-app.cia`
+   Updates werden genauso installiert; Speicher und Spielstände bleiben dabei erhalten.
 3. **Daten erzeugen** (einmalig, siehe unten) und den Ordner `pokemon-world-3d` ins
    Hauptverzeichnis der SD-Karte kopieren.
 

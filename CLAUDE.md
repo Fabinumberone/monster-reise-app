@@ -154,6 +154,7 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 - Keine Hinweis-Popups, die den Spieler zu neuen Zielen führen.
 - Spieldaten, Spielstände und konvertierte Daten nie committen.
 - Vor jedem Schreiben in einen Spielstand eine Sicherung anlegen.
-- Pushen/Releases nur auf ausdrücklichen Wunsch des Nutzers (GitHub-Konto Fabinumberone, `gh` angemeldet).
+- Öffentliches Repository https://github.com/Fabinumberone/monster-reise-app (seit 2026-11-08, Nutzer: „öffentlich“). Pushen/Releases nur auf ausdrücklichen Wunsch des Nutzers. Commit-E-Mail ist die GitHub-noreply-Adresse (Gmail wurde vor dem ersten Push aus allen Commits entfernt, nie wieder verwenden).
+- Release: in `app/` `make cia`, dann `tools/release.sh`, dann `gh release create vX.Y.Z build/release/* --latest` (keine Vorabversion, sonst geht der feste Link `releases/latest/download/monster-reise-app.cia` für FBI nicht). Erstes Release v0.1.0.
 - Commit-Nachrichten enden mit `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - In PowerShell nie `Set-Content` für Quelltexte (Umlaute gehen kaputt). Stattdessen `[IO.File]::WriteAllText` mit UTF-8 ohne BOM oder das Edit-Tool.
