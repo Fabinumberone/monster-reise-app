@@ -156,6 +156,8 @@ struct State {
     std::vector<BackupSet> backups;       // Sicherungen, neueste zuerst
     int bkSel = 0, bkScroll = 0, bkStep = 0; // 0 Liste, 1 Frage, 2 zweite Bestätigung, 3 erledigt
     std::vector<std::string> bkResult;
+    int listFilter = 0;                   // Liste: Filter (siehe FILTERS)
+    std::string search;                   // Liste: Suche (Name oder Mindestlevel)
     int infoScroll = 0;                   // Abgleich-Seite: erste sichtbare Zeile
     int releaseStep = 0;                  // Entlassen: 0 erste Frage, 1 zweite Bestätigung (mit Y)
     std::string bankErr;
@@ -390,11 +392,47 @@ bool slotVisibleHere(const State& st, int idx) {
 BankEntry& entryAt(State& st, int pos) { return pos < Bank::PARTY ? st.bank.party[size_t(pos)] : st.bank.boxes[size_t(pos - Bank::PARTY)]; }
 const BankEntry& entryAt(const State& st, int pos) { return pos < Bank::PARTY ? st.bank.party[size_t(pos)] : st.bank.boxes[size_t(pos - Bank::PARTY)]; }
 
+const char* const FILTERS[] = {"Alle", "Schillernd", "Nicht schillernd", "Hier nicht sichtbar", "Fehlt in einem Spiel", "Eier"};
+constexpr int NFILTERS = 6;
+int levelOf(const PK6& pk);
+std::string monName(const PK6& pk);
+
+// Kleinschreibung für die Suche (ASCII und deutsche Umlaute in UTF-8)
+std::string lowerDe(std::string s) {
+    for (size_t i = 0; i < s.size(); i++) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c >= 'A' && c <= 'Z') s[i] = char(c + 32);
+        else if (c == 0xC3 && i + 1 < s.size()) {
+            unsigned char d = static_cast<unsigned char>(s[i + 1]);
+            if (d == 0x84 || d == 0x96 || d == 0x9C) s[i + 1] = char(d + 0x20); // Ä Ö Ü -> ä ö ü
+        }
+    }
+    return s;
+}
+
+bool passesFilter(const State& st, const BankEntry& e) {
+    const PK6& pk = e.pk;
+    switch (st.listFilter) {
+    case 1: if (pk.isEgg() || !pk.isShiny()) return false; break;
+    case 2: if (pk.isEgg() || pk.isShiny()) return false; break;
+    case 3: if (!e.away() && visibleHere(st, pk)) return false; break;
+    case 4: if (!e.away()) return false; break;
+    case 5: if (!pk.isEgg()) return false; break;
+    }
+    if (st.search.empty()) return true;
+    bool digits = true;
+    for (char c : st.search) digits = digits && c >= '0' && c <= '9';
+    if (digits) return !pk.isEgg() && levelOf(pk) >= std::atoi(st.search.c_str());
+    std::string q = lowerDe(st.search);
+    if (lowerDe(monName(pk)).find(q) != std::string::npos) return true;
+    return !pk.isEgg() && lowerDe(g_names.species(pk.species())).find(q) != std::string::npos;
+}
+
 void buildList(State& st) {
     st.list.clear();
     auto add = [&](int pos) {
         const BankEntry& e = entryAt(st, pos);
-        if (!e.used) return;
+        if (!e.used || !passesFilter(st, e)) return;
         u16 sp = e.pk.isEgg() ? 0 : e.pk.species(); // Eier zuerst
         for (auto& g : st.list)
             if (g.species == sp) { g.pos.push_back(pos); return; }
@@ -595,7 +633,13 @@ constexpr int LIST_ROWS = 9;
 
 void drawList(const State& st) {
     if (st.listOpen < 0) {
-        text("Liste nach Pokédex-Nummer", 8, 48, 0.5f, C_WHITE);
+        std::string head = "Liste nach Pokédex-Nummer";
+        if (st.listFilter || !st.search.empty()) {
+            head = std::string("Filter: ") + FILTERS[st.listFilter];
+            if (!st.search.empty()) head += "  Suche: " + st.search;
+        }
+        text(head, 8, 48, 0.5f, st.listFilter || !st.search.empty() ? C_SEL : C_WHITE, LEFT, 300);
+        if (st.list.empty()) text("Nichts gefunden.", 200, 110, 0.5f, C_LIGHT, CENTER);
         text(std::to_string(st.list.size()) + " Arten", 392, 50, 0.4f, C_LIGHT, RIGHT);
         for (int r = 0; r < LIST_ROWS; r++) {
             int i = st.listScroll + r;
@@ -615,7 +659,7 @@ void drawList(const State& st) {
             for (int p : g.pos) mk += int(st.marked.count(p));
             if (mk) text(std::to_string(mk) + " markiert", 330, y + 1, 0.4f, C_ERR, RIGHT);
         }
-        if (st.marked.empty()) text("A: öffnen   ▲▼ ◀▶ blättern   SELECT: Doppelte", 392, 226, 0.36f, C_LIGHT, RIGHT, 384);
+        if (st.marked.empty()) text("A: öffnen  ▲▼◀▶ blättern  L: Filter  R: Suche  SELECT: Doppelte", 392, 226, 0.34f, C_LIGHT, RIGHT, 384);
         else text("A: öffnen   SELECT: " + std::to_string(st.marked.size()) + " markierte entlassen   X: Markierungen löschen", 392, 226, 0.36f, C_ERR, RIGHT, 384);
         return;
     }
@@ -1204,6 +1248,16 @@ void pickOrDrop(State& st) {
     st.held = -1;
 }
 
+// Suche über die Systemtastatur: Name (Teil) oder Zahl = Mindestlevel; leer = keine Suche
+void searchList(State& st) {
+    SwkbdState kb;
+    swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 24);
+    swkbdSetHintText(&kb, "Name oder Mindestlevel");
+    swkbdSetInitialText(&kb, st.search.c_str());
+    char buf[96] = {};
+    if (swkbdInputText(&kb, buf, sizeof buf) == SWKBD_BUTTON_CONFIRM) st.search = buf;
+}
+
 void openList(State& st) {
     st.held = -1;
     st.marked.clear();
@@ -1405,7 +1459,12 @@ void input(State& st, u32 down, const touchPosition& t) {
         }
         break;
     case Screen::Menu:
-        if (st.view == View::List && (down & KEY_SELECT)) {
+        if (st.view == View::List && st.listOpen < 0 && (down & (KEY_L | KEY_R))) {
+            if (down & KEY_L) st.listFilter = (st.listFilter + 1) % NFILTERS;
+            else searchList(st);
+            st.listSel = st.listScroll = 0;
+            buildList(st);
+        } else if (st.view == View::List && (down & KEY_SELECT)) {
             if (!st.marked.empty()) { st.releaseStep = 0; st.screen = Screen::Release; }
             else if (st.listOpen < 0) st.screen = Screen::Dupes;
         } else if (st.view == View::List && st.listOpen < 0 && !st.marked.empty() && (down & KEY_X)) st.marked.clear();
