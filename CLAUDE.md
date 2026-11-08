@@ -122,13 +122,14 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 ## Nächste Schritte
 **Vorhaben (mit dem Nutzer abgestimmt 2026-11-08, Reihenfolge nach Vorschlag):**
 1. ~~Pension/Resort~~ **erledigt 2026-11-08**: Pokémon, die in einem gespielten Spielstand fehlen (Pension, Resort, Kampfbox, Fusion … oder freigelassen), werden nicht mehr gelöscht, sondern als „fehlt in <Spiel>“ gemerkt (BankEntry awayLow/awayMedia, Speicher Version 9). Sie werden in keinen Spielstand geschrieben (keine Doppelten), ihr geschriebener Datensatz bleibt beim Spielstand aufbewahrt (Flag 4) zur Wiedererkennung; tauchen sie wieder auf, wird übernommen (z. B. EP aus der Pension). Wirklich freigelassene entlässt man in der App (Liste). App zeigt „fehlt in …“ (PC, Liste) und einen Hinweis auf der Abgleich-Seite; „Doppelte entlassen“ lässt fehlende in Ruhe. Getestet an Kopien (PC: test-weg/test-zurueck): Glumanda in HG „in die Pension“ → fehlt, aus den anderen Spielen verschwunden; „abgeholt“ → wieder überall, danach ruhig. Pensionen werden nicht eigens ausgelesen (kein „in der Pension“-Text).
-2. Sicherungen in der App zurückspielen (Seite „Sicherungen“, je Spielstand die letzten 10 mit Datum).
-3. Abgleich-Seite blätterbar, Zusammenfassung („2 neu in Platin, Karnimani hat sich entwickelt“), Meldungen auch ins Protokoll.
-4. Suche/Filter in der Liste (Name, schillernd, hier nicht sichtbar, Level).
-5. Detailansicht: in welchen Generationen sichtbar, und warum nicht.
-6. Pokédex-Übersicht über alle Spiele (fehlende Arten), später mit Fangorten aus eigenen Dumps (nur SD).
+2. ~~Sicherungen zurückspielen~~ **erledigt (0.5.0)**: Menü „Sicherungen“, Stände je Zeitpunkt (Dateiname „JJJJMMTT-HHMMSS-<was>“, was = „<Label>-<Datei>“ oder speicher.bin; Inhalt = Stand vor dem Schreiben), A dann Y, vorher Sicherung des jetzigen Stands, danach App beenden.
+   **Ebenfalls 0.5.0**: Knopf „Speichern“ (auch SELECT außerhalb der Liste) = commit(false) ohne Beenden. Alle PC-Boxen freischalten (XY/ORAS 0x4400+0x43E = 31 und 0x43D Bit 7, SM 0x4800+0x5E1 = 32, USUM 0x4C00+0x5E1 = 32, BW/B2W2 0x3DD = 24 mit CRC von Block 0 bei 0x3E2/Tabelle+0; nach PKHeX BoxLayout5/6/7; vorher waren 7/8 Boxen offen, Pokémon dahinter unsichtbar). Systemschrift hat kein ◀▶ (zeigt „?“), ▲▼ gehen; → vermieden. DS-Module nicht aus der App starten: NS_RebootToTitle(GAME_CARD, 0, 0) lässt ns abstürzen (svcBreak) → Hinweis HOME-Menü.
+3. ~~Abgleich-Seite~~ **erledigt**: blätterbar, Zusammenfassung oben, WorldReport.details (neu, Entwicklung, Level, fehlt, Items, Geld), alles ins Protokoll („Bericht:“).
+4. ~~Suche/Filter~~ **erledigt**: L = Filter (Alle, Schillernd, Nicht schillernd, Hier nicht sichtbar, Fehlt, Eier), R = Tastatur (Name oder Zahl = Mindestlevel).
+5. ~~Detailansicht~~ **erledigt**: X in geöffneter Art; whyNotIn/whyNotGB/whyNotGen3/whyNotGen45 (fits* rufen diese auf), plus „Boxen voll“ über die Position unter den passenden Box-Pokémon.
+6. ~~Pokédex-Übersicht~~ **erledigt** (Y nach der Liste): Arten je Generation, fehlende Arten; Fangorte noch offen.
 7. „Reisen“ im Spiel (3GX/Code-Patch), z. B. Eintrag am PC im Pokémon-Center.
-8. Reisetagebuch (automatisches Logbuch: Regionen, Fänge, Entwicklungen).
+8. ~~Reisetagebuch~~ **erledigt** (Y nach dem Pokédex): sdmc:/pokemon-world-3d/tagebuch.txt, höchstens 2000 Zeilen.
 9. Trainerpass über alle Regionen (Orden, Spielzeit, Arten; nur lesend).
 10. Reise-Optik: eigene Weltkarte, Übergang „Fähre nach …“, Bordkarte (nur eigene Grafik).
 11. **Tauschentwicklung in der App** (statt „Tausch mit sich selbst“): Option „Entwickeln“ für Pokémon, die sich durch Tausch entwickeln (mit/ohne Item, Item wird verbraucht; Laukaps/Schnuthelm nur gemeinsam), Entwicklungsdaten aus dem eigenen UM-Dump (a/0/1/4) in arten.bin.
