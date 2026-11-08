@@ -1267,10 +1267,18 @@ void Bank::writeMetaGBA(SaveGBA& sav) {
 void Bank::writeMetaNDS(SaveNDS& sav) {
     // Items: nicht reisende Items bleiben, dann reisende nach Rangfolge in ihre Tasche
     using P = SaveNDS::Pouch;
+    // Nicht reisende Items bleiben; mehrfache Stapel desselben Items werden zusammengefasst (räumt Taschen
+    // auf, in die frühere Versionen dasselbe Item bei jedem Abgleich erneut gelegt haben).
     std::vector<std::vector<NDSItem>> lists(8);
     for (auto p : ndsTravelPouches(sav))
-        for (const NDSItem& i : sav.pouch(p))
-            if (!ndsItemTravels(i.id)) lists[size_t(p)].push_back(i);
+        for (const NDSItem& i : sav.pouch(p)) {
+            if (!i.id || ndsItemTravels(i.id)) continue;
+            auto& dst = lists[size_t(p)];
+            bool merged = false;
+            for (auto& o : dst)
+                if (o.id == i.id) { o.count = uint16_t(std::min<uint32_t>(uint32_t(o.count) + i.count, 999)); merged = true; break; }
+            if (!merged) dst.push_back(i);
+        }
     std::vector<size_t> order(items.size());
     for (size_t i = 0; i < order.size(); i++) order[i] = i;
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return itemPriority(items[a].item) < itemPriority(items[b].item); });
@@ -1278,7 +1286,8 @@ void Bank::writeMetaNDS(SaveNDS& sav) {
     for (size_t idx : order) {
         BankItem& it = items[idx];
         int p = ndsTravelPouch(sav.game(), it.item);
-        if (p < 0 || !it.count) continue;
+        // gleiche Regel wie beim Lesen (ndsTravelItems), sonst läge das Item doppelt in der Tasche
+        if (p < 0 || !it.count || !ndsItemTravels(it.item)) continue;
         auto& dst = lists[size_t(p)];
         if (int(dst.size()) >= sav.pouchCapacity(P(p))) continue;
         uint16_t n = uint16_t(std::min<uint32_t>(it.count, 999));
