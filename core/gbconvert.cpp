@@ -6,6 +6,7 @@
 #include <ctime>
 
 #include "bytes.hpp"
+#include "gbaconvert.hpp"
 
 namespace pw3d {
 
@@ -141,7 +142,7 @@ PK6 gbToPk7(const GBMon& m, const GBContext& ctx) {
     uint8_t* d = pk.d.data();
     uint32_t key = gbKey(m), rng = key ^ 0x9E3779B9u;
     if (!rng) rng = 1;
-    bool own = (m.tid == ctx.trainer.tid && m.ot == ctx.trainer.name) ||
+    bool own = (m.tid == ctx.trainer.tid && (m.ot == ctx.trainer.name || m.ot == shortTrainerName(ctx.trainer.name))) ||
                (!ctx.gameOt.empty() && m.tid == ctx.gameTid && m.ot == ctx.gameOt);
     uint16_t tid = own ? ctx.trainer.tid : m.tid, sid = own ? ctx.trainer.sid : 0;
 
@@ -244,7 +245,8 @@ GBMon pk7ToGb(const PK6& pk, const GBMon* snap, const GBContext& ctx) {
 
     // Namen
     bool own = isOwn(pk, ctx.trainer);
-    if (snap && snap->tid == m.tid) m.otRaw = snap->otRaw;
+    if (own && trainerShortNameSet()) utf8ToGb(shortTrainerName(ctx.trainer.name), m.otRaw.data(), 11);
+    else if (snap && snap->tid == m.tid) m.otRaw = snap->otRaw;
     else utf8ToGb(own ? ctx.trainer.name : pk.otName(), m.otRaw.data(), 11);
     std::string nick = pk.isNicknamed() ? pk.nickname() : upper(defaultName(m.species, ctx.language, *ctx.names));
     utf8ToGb(nick, m.nickRaw.data(), 11);

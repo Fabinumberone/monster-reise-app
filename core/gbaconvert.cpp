@@ -103,7 +103,28 @@ uint16_t reverseItem(uint16_t modern) {
 
 } // namespace
 
+namespace {
+std::string g_shortFull, g_short;
+} // namespace
+
+void setTrainerShortName(const std::string& fullName, const std::string& shortName) {
+    g_shortFull = fullName;
+    g_short = shortName;
+}
+bool trainerShortNameSet() { return !g_short.empty(); }
+
+std::string shortTrainerName(const std::string& s) {
+    if (!g_short.empty() && s == g_shortFull) return g_short;
+    size_t i = 0;
+    for (int n = 0; n < 7 && i < s.size(); n++) {
+        unsigned char c = s[i];
+        i += c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+    }
+    return s.substr(0, std::min(i, s.size()));
+}
+
 std::string gen3TrainerName(const std::string& s) {
+    if (!g_short.empty() && s == g_shortFull) return g_short;
     size_t i = 0;
     for (int n = 0; n < 7 && i < s.size(); n++) {
         unsigned char c = s[i];

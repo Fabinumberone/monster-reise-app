@@ -50,6 +50,8 @@ const char* BACKUPS = "sdmc:/pokemon-world-3d/sicherungen";
 const char* NAMES = "sdmc:/pokemon-world-3d/namen.txt";
 const char* ICONS = "sdmc:/pokemon-world-3d/icons.bin";
 const char* SPECIES = "sdmc:/pokemon-world-3d/arten.bin";
+const char* SETTINGS = "sdmc:/pokemon-world-3d/einstellungen.txt"; // „kurzname=…“
+std::string readShortName();
 
 // ---------- Farben ----------
 const u32 C_BG = C2D_Color32(0x1E, 0x2A, 0x3A, 0xFF);
@@ -124,7 +126,7 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error, Update, Backups, Evolve };
+enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error, Update, Backups, Evolve, Extras, Trainer };
 
 // Ein Sicherungsstand: alle Dateien mit derselben Zeit (ein Abgleich bzw. ein Schreibvorgang)
 struct BackupSet {
@@ -377,6 +379,7 @@ void loadState(State& st) {
     std::vector<u8> oldFile;
     if (readFileAll(BANK, oldFile)) {
         st.bankOk = st.bank.load(BANK, st.bankErr);
+        setTrainerShortName(st.bank.trainer.name, readShortName());
         st.bank.species = &g_species;
         if (!st.bankOk) { st.loading = false; return; } // beschädigt: nichts anfassen
     }
@@ -861,7 +864,11 @@ void button(const Button& b, const std::string& label, u32 bg, u32 fg, float siz
 }
 
 const Button B_TRAVEL{8, 32, 304, 44}, B_TEAM{8, 82, 148, 42}, B_PC{164, 82, 148, 42}, B_BAG{8, 128, 148, 42}, B_LIST{164, 128, 148, 42};
-const Button B_SAVE{8, 196, 72, 36}, B_UPDATE{84, 196, 72, 36}, B_BACKUPS{160, 196, 76, 36}, B_EXIT{240, 196, 72, 36}, B_BACK{8, 200, 304, 32};
+const Button B_SAVE{8, 196, 96, 36}, B_EXTRAS{112, 196, 96, 36}, B_EXIT{216, 196, 96, 36}, B_BACK{8, 200, 304, 32};
+// Extras
+const Button B_X_UPDATE{8, 34, 304, 40}, B_X_BACKUPS{8, 80, 304, 40}, B_X_TRAINER{8, 126, 304, 40};
+// Trainername
+const Button B_T_FULL{8, 72, 304, 30}, B_T_SHORT{8, 112, 304, 30};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 const Button B_SHINY{8, 140, 304, 36};
 const Button B_YES2{164, 186, 148, 46}, B_NO2{8, 186, 148, 46}; // zweite Bestätigung: Seiten getauscht
@@ -918,10 +925,9 @@ void drawBottom(const State& st) {
         button(B_BAG, "Beutel", st.view == View::Bag ? C_SEL : C_BG2, st.view == View::Bag ? C_TEXT : C_WHITE, 0.7f);
         button(B_LIST, "Liste", st.view == View::List ? C_SEL : C_BG2, st.view == View::List ? C_TEXT : C_WHITE, 0.7f);
         text("X: Spielen  Y: Ansicht  L/R: Box  A: umräumen  SELECT: Speichern", 160, 178, 0.4f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
-        button(B_SAVE, "Speichern", st.dirty ? C_SEL : C_BG2, st.dirty ? C_TEXT : C_LIGHT, 0.42f);
-        button(B_UPDATE, "Update", C_BG2, C_LIGHT, 0.45f);
-        button(B_BACKUPS, "Sicherungen", C_BG2, C_LIGHT, 0.38f);
-        button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.45f);
+        button(B_SAVE, "Speichern", st.dirty ? C_SEL : C_BG2, st.dirty ? C_TEXT : C_LIGHT, 0.48f);
+        button(B_EXTRAS, "Extras", C_BG2, C_LIGHT, 0.5f);
+        button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.5f);
         break;
     case Screen::Done: break;
     case Screen::Info: {
@@ -1090,6 +1096,30 @@ void drawBottom(const State& st) {
             button(B_YES2, "Ja, zurück (Y)", C_ERR, C_WHITE, 0.5f);
             button(B_NO2, "Abbrechen (B)", C_BG2, C_WHITE, 0.5f);
         }
+        break;
+    }
+    case Screen::Extras:
+        text("Extras", 160, 4, 0.6f, C_WHITE, CENTER);
+        button(B_X_UPDATE, "Nach Updates suchen", C_BG2, C_WHITE, 0.5f);
+        button(B_X_BACKUPS, "Sicherungen zurückspielen", C_BG2, C_WHITE, 0.5f);
+        button(B_X_TRAINER, "Trainername", C_BG2, C_WHITE, 0.5f);
+        button(B_BACK, "Zurück (B)", C_BG2, C_WHITE, 0.5f);
+        break;
+    case Screen::Trainer: {
+        text("Trainername", 160, 4, 0.6f, C_WHITE, CENTER);
+        text("Antippen zum Ändern. Vorschau, wie du heißt:", 160, 34, 0.4f, C_LIGHT, CENTER, 304);
+        const std::string& full = st.bank.trainer.name;
+        std::string shortN = shortTrainerName(full);
+        button(B_T_FULL, "", C_CARD, C_TEXT, 0.45f);
+        text("X/Y bis Ultramond (12):", 16, 79, 0.4f, C_MUTED);
+        text(full, 304, 78, 0.5f, C_TEXT, RIGHT, 140);
+        button(B_T_SHORT, "", C_CARD, C_TEXT, 0.45f);
+        text("Rot bis Weiß 2 (7):", 16, 119, 0.4f, C_MUTED);
+        text(shortN, 304, 118, 0.5f, C_TEXT, RIGHT, 140);
+        if (!trainerShortNameSet()) text("(kein Kurzname: die ersten 7 Zeichen)", 160, 148, 0.36f, C_LIGHT, CENTER, 304);
+        text("Gilt auch für deine eigenen Pokémon (Originaltrainer).", 160, 164, 0.36f, C_LIGHT, CENTER, 304);
+        text("Wird beim Speichern in alle Spielstände geschrieben.", 160, 178, 0.36f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
+        button(B_BACK, "Zurück (B)", C_BG2, C_WHITE, 0.5f);
         break;
     }
     case Screen::Evolve: {
@@ -1531,6 +1561,71 @@ void doEvolve(State& st) {
     st.screen = Screen::Info;
 }
 
+// ---------- Trainername ----------
+std::string readShortName() {
+    std::string v;
+    if (FILE* f = std::fopen(SETTINGS, "r")) {
+        char buf[256];
+        while (std::fgets(buf, sizeof buf, f)) {
+            std::string l = buf;
+            while (!l.empty() && (l.back() == 10 || l.back() == 13)) l.pop_back();
+            if (l.rfind("kurzname=", 0) == 0) v = l.substr(9);
+        }
+        std::fclose(f);
+    }
+    return v;
+}
+void writeShortName(const std::string& v) {
+    if (FILE* f = std::fopen(SETTINGS, "w")) {
+        std::fputs(("kurzname=" + v).c_str(), f);
+        std::fputc(10, f);
+        std::fclose(f);
+    }
+}
+
+std::string askName(const char* hint, const std::string& initial, int maxChars) {
+    SwkbdState kb;
+    swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, maxChars);
+    swkbdSetHintText(&kb, hint);
+    swkbdSetInitialText(&kb, initial.c_str());
+    char buf[64] = {};
+    if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_CONFIRM) return "\x01"; // abgebrochen
+    return buf;
+}
+
+void editFullName(State& st) {
+    if (!st.bankOk || !st.synced) return;
+    std::string old = st.bank.trainer.name;
+    std::string n = askName("Name für X/Y bis Ultramond", old, 12);
+    if (n == "\x01" || n.empty() || n == old) return;
+    // Eigene Pokémon (TID/SID des Speichers, alter Name) bekommen den neuen Originaltrainer
+    int changed = 0;
+    auto fix = [&](BankEntry& e) {
+        if (!e.used || e.pk.tid() != st.bank.trainer.tid || e.pk.sid() != st.bank.trainer.sid || e.pk.otName() != old) return;
+        e.pk.setOtName(n);
+        e.pk.updateChecksum();
+        changed++;
+    };
+    for (auto& e : st.bank.party) fix(e);
+    for (auto& e : st.bank.boxes) fix(e);
+    st.bank.trainer.name = n;
+    setTrainerShortName(n, readShortName());
+    st.dirty = true;
+    journalAdd("Trainername geändert: " + old + " zu " + n + " (" + std::to_string(changed) + " Pokémon)");
+    logLine("Trainername " + old + " -> " + n + ", " + std::to_string(changed) + " Pokémon umgeschrieben");
+}
+
+void editShortName(State& st) {
+    if (!st.bankOk || !st.synced) return;
+    std::string cur = readShortName();
+    std::string n = askName("Name für Rot bis Weiß 2 (leer = erste 7 Zeichen)", cur.empty() ? shortTrainerName(st.bank.trainer.name) : cur, 7);
+    if (n == "\x01" || n == cur) return;
+    writeShortName(n);
+    setTrainerShortName(st.bank.trainer.name, n);
+    st.dirty = true;
+    journalAdd("Kurzname für Gen 1–5: " + (n.empty() ? std::string("erste 7 Zeichen") : n));
+}
+
 void openList(State& st) {
     st.detail = false;
     st.held = -1;
@@ -1736,6 +1831,19 @@ void input(State& st, u32 down, const touchPosition& t) {
             else if ((touch && B_NO2.hit(t)) || (down & KEY_B)) st.bkStep = 0;
         }
         break;
+    case Screen::Extras:
+        if (touch && B_X_UPDATE.hit(t)) checkUpdate(st);
+        else if (touch && B_X_BACKUPS.hit(t)) openBackups(st);
+        else if (touch && B_X_TRAINER.hit(t)) {
+            if (st.bankOk && st.synced) st.screen = Screen::Trainer;
+            else { st.message = "Nicht möglich\nDer Abgleich beim Start war nicht vollständig."; st.screen = Screen::Error; }
+        } else if ((touch && B_BACK.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
+        break;
+    case Screen::Trainer:
+        if (touch && B_T_FULL.hit(t)) editFullName(st);
+        else if (touch && B_T_SHORT.hit(t)) editShortName(st);
+        else if ((touch && B_BACK.hit(t)) || (down & KEY_B)) st.screen = Screen::Extras;
+        break;
     case Screen::Evolve:
         if ((touch && B_YES.hit(t)) || (down & KEY_A)) doEvolve(st);
         else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
@@ -1777,8 +1885,7 @@ void input(State& st, u32 down, const touchPosition& t) {
         else if (touch && B_LIST.hit(t)) openList(st);
         else if (touch && B_EXIT.hit(t)) requestQuit(st);
         else if ((touch && B_SAVE.hit(t)) || (st.view != View::List && (down & KEY_SELECT))) saveAll(st);
-        else if (touch && B_UPDATE.hit(t)) checkUpdate(st);
-        else if (touch && B_BACKUPS.hit(t)) openBackups(st);
+        else if (touch && B_EXTRAS.hit(t)) st.screen = Screen::Extras;
         break;
     case Screen::Travel: {
         if (st.travelRegion < 0) {

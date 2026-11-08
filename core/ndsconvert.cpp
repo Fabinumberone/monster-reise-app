@@ -5,6 +5,7 @@
 #include <ctime>
 
 #include "bytes.hpp"
+#include "gbaconvert.hpp"
 #include "gbconvert.hpp"
 
 namespace pw3d {
@@ -115,6 +116,7 @@ uint8_t abilityNumber(const PK45& n) {
 } // namespace
 
 std::string ndsTrainerName(const std::string& s) {
+    if (trainerShortNameSet()) return shortTrainerName(s);
     size_t i = 0;
     for (int n = 0; n < 7 && i < s.size(); n++) {
         unsigned char c = s[i];

@@ -32,6 +32,11 @@ struct GBAContext {
 
 // Trainername, wie ihn ein Gen-3-Spiel speichern kann (höchstens 7 Zeichen).
 std::string gen3TrainerName(const std::string& utf8);
+// Name des gemeinsamen Trainers in Spielen mit höchstens 7 Zeichen (Gen 1–5). Ohne Kurzname die
+// ersten 7 Zeichen, mit Kurzname (setTrainerShortName) dieser, wenn utf8 der volle Name ist.
+std::string shortTrainerName(const std::string& utf8);
+void setTrainerShortName(const std::string& fullName, const std::string& shortName);
+bool trainerShortNameSet();
 
 uint16_t gen3ItemToModern(uint16_t id);
 uint16_t modernItemToGen3(uint16_t id); // 0 = keine Entsprechung

@@ -45,7 +45,7 @@ APP_DESCRIPTION	:=	Ein Spielstand für alle Regionen
 APP_AUTHOR	:=	Fabi
 # Version: bei jedem Release erhöhen (Tag vX.Y.Z, der Updater vergleicht damit)
 VERSION_MAJOR	:=	0
-VERSION_MINOR	:=	6
+VERSION_MINOR	:=	7
 VERSION_MICRO	:=	0
 # Titelversion der CIA: muss bei jedem Release steigen, sonst lehnt der 3DS das Update ab (0xD8E08027).
 # makerom übernimmt nur Major (·1024) und Micro, Minor wird verworfen (getestet 2026-11-08). Daher:

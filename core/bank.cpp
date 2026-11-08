@@ -1243,7 +1243,7 @@ void Bank::writeMetaGB(SaveGB& sav) {
     sav.setBalls(balls);
     sav.setPcItems(pc);
     if (moneyKnown) { moneyWritten = std::min<uint32_t>(money, 999999); sav.setMoney(moneyWritten); }
-    sav.setTrainer(trainer.name, trainer.tid);
+    sav.setTrainer(trainerShortNameSet() ? shortTrainerName(trainer.name) : trainer.name, trainer.tid);
 }
 
 void Bank::writeMetaGBA(SaveGBA& sav) {

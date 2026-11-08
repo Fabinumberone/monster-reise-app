@@ -606,6 +606,7 @@ static int cmdWelt(int argc, char** argv) {
     std::string err;
     if (std::ifstream(argv[2]) && !bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     bank.species = &g_species;
+    if (const char* k = std::getenv("PW3D_KURZNAME")) setTrainerShortName(bank.trainer.name, k); // wie einstellungen.txt der App
     std::vector<WorldSave> saves;
     std::vector<std::string> paths;
     for (int i = 3; i < argc; i++) {
