@@ -130,7 +130,7 @@ struct BackupSet {
     std::string stamp;               // „20261108-102205“
     std::vector<std::string> files;  // Dateinamen in sicherungen/
 };
-enum class View { Team, PC, Bag, List };
+enum class View { Team, PC, Bag, List, Dex };
 
 // Liste: alle Pokémon nach Nationaldex-Nummer gruppiert (Positionen wie State::held).
 struct ListGroup {
@@ -156,6 +156,9 @@ struct State {
     std::vector<BackupSet> backups;       // Sicherungen, neueste zuerst
     int bkSel = 0, bkScroll = 0, bkStep = 0; // 0 Liste, 1 Frage, 2 zweite Bestätigung, 3 erledigt
     std::vector<std::string> bkResult;
+    std::vector<u16> dexMissing;          // Pokédex: fehlende Arten
+    int dexOwned[8] = {};                 // je Generation (Index 1–7), [0] gesamt
+    int dexScroll = 0;
     bool detail = false;                  // Liste: Detailansicht des gewählten Pokémon
     std::vector<std::pair<std::string, std::string>> detailRows; // Spiel, Ergebnis
     int listFilter = 0;                   // Liste: Filter (siehe FILTERS)
@@ -735,6 +738,36 @@ void drawList(const State& st) {
     else text("A: markieren   SELECT: " + std::to_string(st.marked.size()) + " markierte entlassen   B: zurück", 392, 226, 0.36f, C_ERR, RIGHT, 384);
 }
 
+// Pokédex über alle Spiele: welche Arten der gemeinsame Speicher hat (Eier zählen nicht)
+const int GEN_END[8] = {0, 151, 251, 386, 493, 649, 721, 807};
+constexpr int DEX_ROWS = 8, DEX_COLS = 3;
+
+void drawDex(const State& st) {
+    text("Pokédex: " + std::to_string(st.dexOwned[0]) + " von 807 Arten", 8, 30, 0.5f, C_WHITE);
+    for (int g = 1; g <= 7; g++) {
+        int total = GEN_END[g] - GEN_END[g - 1];
+        float x = 8 + float((g - 1) % 4) * 98, y = 50 + float((g - 1) / 4) * 15;
+        bool full = st.dexOwned[g] == total;
+        text("Gen " + std::to_string(g) + ": " + std::to_string(st.dexOwned[g]) + "/" + std::to_string(total), x, y, 0.38f, full ? C_OK : C_LIGHT);
+    }
+    if (st.dexMissing.empty()) {
+        text("Alle Arten vorhanden!", 200, 130, 0.6f, C_OK, CENTER);
+        return;
+    }
+    text("Es fehlen " + std::to_string(st.dexMissing.size()) + ":", 8, 84, 0.42f, C_WHITE);
+    for (int r = 0; r < DEX_ROWS; r++)
+        for (int c = 0; c < DEX_COLS; c++) {
+            size_t i = size_t((st.dexScroll + r) * DEX_COLS + c);
+            if (i >= st.dexMissing.size()) break;
+            char nr[8];
+            std::snprintf(nr, sizeof nr, "%03u", unsigned(st.dexMissing[i]));
+            float x = 8 + float(c) * 130, y = 102 + float(r) * 15;
+            text(nr, x, y, 0.38f, C_SEL);
+            text(g_names.species(st.dexMissing[i]), x + 28, y, 0.38f, C_WHITE, LEFT, 98);
+        }
+    text("▲▼ blättern   Y: weiter", 392, 226, 0.36f, C_LIGHT, RIGHT);
+}
+
 void drawTop(const State& st) {
     drawHeader(st);
     if (st.loading) {
@@ -751,6 +784,7 @@ void drawTop(const State& st) {
     case View::PC: drawPC(st); break;
     case View::Bag: drawBag(st); break;
     case View::List: drawList(st); break;
+    case View::Dex: drawDex(st); break;
     }
     if (st.held >= 0 && (st.view == View::Team || st.view == View::PC)) {
         rect(0, 222, 400, 18, C_HEAD);
@@ -1324,6 +1358,23 @@ void openDetail(State& st) {
     st.detail = true;
 }
 
+void openDex(State& st) {
+    std::vector<bool> own(808, false);
+    auto mark = [&](const BankEntry& e) { if (e.used && !e.pk.isEgg() && e.pk.species() <= 807) own[e.pk.species()] = true; };
+    for (auto& e : st.bank.party) mark(e);
+    for (auto& e : st.bank.boxes) mark(e);
+    st.dexMissing.clear();
+    for (int& n : st.dexOwned) n = 0;
+    for (int sp = 1; sp <= 807; sp++) {
+        int g = 1;
+        while (sp > GEN_END[g]) g++;
+        if (own[size_t(sp)]) { st.dexOwned[g]++; st.dexOwned[0]++; }
+        else st.dexMissing.push_back(u16(sp));
+    }
+    st.dexScroll = 0;
+    st.view = View::Dex;
+}
+
 void openList(State& st) {
     st.detail = false;
     st.held = -1;
@@ -1447,6 +1498,14 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (down & KEY_DDOWN) st.teamCursor = (st.teamCursor + 2) % Bank::PARTY;
             if (down & KEY_DUP) st.teamCursor = (st.teamCursor + Bank::PARTY - 2) % Bank::PARTY;
         }
+        if (st.view == View::Dex) {
+            int rows = (int(st.dexMissing.size()) + DEX_COLS - 1) / DEX_COLS;
+            int maxScroll = std::max(0, rows - DEX_ROWS);
+            if (down & KEY_DDOWN) st.dexScroll = std::min(maxScroll, st.dexScroll + 1);
+            if (down & KEY_DUP) st.dexScroll = std::max(0, st.dexScroll - 1);
+            if (down & KEY_DRIGHT) st.dexScroll = std::min(maxScroll, st.dexScroll + DEX_ROWS);
+            if (down & KEY_DLEFT) st.dexScroll = std::max(0, st.dexScroll - DEX_ROWS);
+        }
         if (st.view == View::Bag) {
             int maxScroll = std::max(0, int(st.bank.items.size()) - BAG_ROWS);
             if (down & KEY_DDOWN) st.bagScroll = std::min(maxScroll, st.bagScroll + 1);
@@ -1454,6 +1513,7 @@ void input(State& st, u32 down, const touchPosition& t) {
         }
         if (down & KEY_Y) {
             if (st.view == View::Bag) openList(st);
+            else if (st.view == View::List) openDex(st);
             else st.view = st.view == View::Team ? View::PC : st.view == View::PC ? View::Bag : View::Team;
         }
     }
@@ -1538,7 +1598,7 @@ void input(State& st, u32 down, const touchPosition& t) {
             else if (st.listOpen < 0) st.screen = Screen::Dupes;
         } else if (st.view == View::List && st.listOpen < 0 && !st.marked.empty() && (down & KEY_X)) st.marked.clear();
         else if (st.view == View::List && ((down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT)) || (st.listOpen >= 0 && (down & KEY_X)))) listInput(st, down);
-        else if (st.view != View::Bag && st.view != View::List && (down & KEY_A)) pickOrDrop(st);
+        else if ((st.view == View::Team || st.view == View::PC) && (down & KEY_A)) pickOrDrop(st);
         else if (down & KEY_B) st.held = -1;
         else if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) { st.held = -1; startTravel(st); }
         else if (touch && B_TEAM.hit(t)) st.view = View::Team;
