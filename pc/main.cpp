@@ -638,6 +638,7 @@ static int cmdWelt(int argc, char** argv) {
     }
     if (!bank.save(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     for (auto& l : rep.lines) std::printf("%s\n", l.c_str());
+    for (auto& l : rep.details) std::printf("  %s\n", l.c_str());
     std::printf("gespielt:");
     for (auto& w : saves) if (w.played) std::printf(" %s", w.label.c_str());
     std::printf("\n%d neu, %d verändert, %d freigelassen, %d Spielstände geschrieben, %d Pokémon im Speicher, Geld %u\n",

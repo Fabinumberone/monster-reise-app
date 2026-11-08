@@ -1972,6 +1972,16 @@ struct WorldImpl {
         e.uid = uid;
     }
 
+    int levelOfPk(const PK6& pk) { return pk.species() ? levelForExp(sp.get(pk.species()).growth, pk.exp()) : 0; }
+    std::string monLabel(const PK6& pk) { return nm.species(pk.species()) + " Lv. " + std::to_string(levelOfPk(pk)); }
+    // Was sich an einem Pokémon geändert hat (für den Bericht)
+    void noteChange(const std::string& where, const PK6& before, const PK6& after) {
+        if (before.species() != after.species() && before.species() && after.species())
+            rep.details.push_back(where + ": " + nm.species(before.species()) + " hat sich zu " + nm.species(after.species()) + " entwickelt");
+        int lb = levelOfPk(before), la = levelOfPk(after);
+        if (la > lb) rep.details.push_back(where + ": " + nm.species(after.species()) + " Lv. " + std::to_string(lb) + " → " + std::to_string(la));
+    }
+
     uint32_t expOf(WorldSave& w, const GameMon& g) {
         switch (fmtOf(w.gen)) {
         case Fmt::G67: return rd32(&g.rec[0x10]);
@@ -2040,7 +2050,9 @@ struct WorldImpl {
                     uint32_t exp = expOf(w, g);
                     auto t = touched.find(e->uid);
                     if (t == touched.end() || exp > t->second) {
+                        PK6 before = e->pk;
                         applyChange(w, *e, g, wm.rec);
+                        noteChange(w.label, before, e->pk);
                         touched[e->uid] = exp;
                         updated++;
                     }
@@ -2059,6 +2071,7 @@ struct WorldImpl {
                     BankEntry n = convertNew(w, g);
                     b.nextUid--;
                     n.uid = uid;
+                    noteChange(w.label, ex->pk, n.pk);
                     *ex = n;
                     touched[uid] = exp;
                     updated++;
@@ -2069,6 +2082,7 @@ struct WorldImpl {
             if (contains(b.seen, monId(pk))) continue; // freigelassen
             fresh.push_back({convertNew(w, g), g});
             insertSorted(b.seen, monId(fresh.back().first.pk));
+            rep.details.push_back(w.label + ": neu " + monLabel(fresh.back().first.pk) + (fresh.back().first.pk.isShiny() ? " ★" : ""));
             added++;
         }
         // Hier geschrieben, jetzt fehlend: Pension, Resort, Kampfbox … oder freigelassen. Nicht löschen,
@@ -2082,6 +2096,7 @@ struct WorldImpl {
             e->awayLow = w.lowId;
             e->awayMedia = w.media;
             missing++;
+            rep.details.push_back(w.label + ": " + monLabel(e->pk) + " fehlt (Pension, Resort … oder freigelassen?)");
         }
 
         // ----- Plätze -----
@@ -2132,6 +2147,7 @@ struct WorldImpl {
         for (uint16_t item : all) {
             int delta = nowCount(item) - writtenCount(item);
             if (!delta) continue;
+            rep.details.push_back(w.label + ": " + (delta > 0 ? "+" : "−") + std::to_string(std::abs(delta)) + " " + nm.item(item));
             BankItem* bi = nullptr;
             for (auto& x : b.items) if (x.item == item) bi = &x;
             if (!bi) { b.items.push_back({item, 0, 0}); bi = &b.items.back(); }
@@ -2139,6 +2155,8 @@ struct WorldImpl {
             bi->count = uint32_t(std::max<int64_t>(0, c));
         }
         b.items.erase(std::remove_if(b.items.begin(), b.items.end(), [](const BankItem& x) { return x.count == 0; }), b.items.end());
+        int64_t dm = int64_t(moneyOf(w)) - int64_t(slot.money);
+        if (dm) rep.details.push_back(w.label + ": Geld " + (dm > 0 ? "+" : "−") + std::to_string(dm > 0 ? dm : -dm) + " ₽");
         int64_t m = int64_t(b.money) + int64_t(moneyOf(w)) - int64_t(slot.money);
         b.money = uint32_t(std::clamp<int64_t>(m, 0, 9999999));
         b.moneyKnown = true;

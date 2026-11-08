@@ -156,6 +156,7 @@ struct State {
     std::vector<BackupSet> backups;       // Sicherungen, neueste zuerst
     int bkSel = 0, bkScroll = 0, bkStep = 0; // 0 Liste, 1 Frage, 2 zweite Bestätigung, 3 erledigt
     std::vector<std::string> bkResult;
+    int infoScroll = 0;                   // Abgleich-Seite: erste sichtbare Zeile
     int releaseStep = 0;                  // Entlassen: 0 erste Frage, 1 zweite Bestätigung (mit Y)
     std::string bankErr;
     std::vector<SaveSlot> installed;
@@ -231,6 +232,7 @@ void pruneBackups(const std::string& what) {
 }
 
 constexpr int BK_ROWS = 6;
+constexpr int INFO_ROWS = 9; // Abgleich-Seite
 
 // „20261108-102205“ -> „08.11.2026 10:22:05“
 std::string stampLabel(const std::string& s) {
@@ -302,10 +304,17 @@ void commit(State& st, bool sync) {
         if (rep.released) l += ", " + std::to_string(rep.released) + " freigelassen";
         st.notice.push_back(l);
     }
+    // Zusammenfassung nach oben, darunter je Spielstand, dann die Einzelheiten
+    if (!st.notice.empty() && (rep.added || rep.updated || rep.released || written)) {
+        std::rotate(st.notice.begin(), st.notice.end() - 1, st.notice.end());
+    }
+    for (auto& d : rep.details) st.notice.push_back(d);
     if (rep.missing) {
         st.notice.push_back("Fehlende Pokémon (Pension, Resort, Kampfbox …) bleiben im Speicher,");
         st.notice.push_back("bis sie wieder auftauchen. Freigelassen? Dann in der Liste entlassen.");
     }
+    for (auto& l : st.notice) logLine("Bericht: " + l);
+    st.infoScroll = 0;
 }
 
 // Beim Start: alle Spielstände lesen, Änderungen übernehmen, alle aktualisieren (world.hpp).
@@ -740,10 +749,19 @@ void drawBottom(const State& st) {
     case Screen::Done: break;
     case Screen::Info: {
         text("Abgleich der Spielstände", 160, 4, 0.55f, C_WHITE, CENTER);
-        float y = 34;
-        for (size_t i = 0; i < st.notice.size() && i < 9; i++, y += 17) text(st.notice[i], 8, y, 0.4f, C_WHITE, LEFT, 304);
-        if (st.notice.size() > 9) text("… und " + std::to_string(st.notice.size() - 9) + " weitere", 8, y, 0.4f, C_LIGHT);
-        button(B_BACK, "Weiter (A)", C_OK, C_WHITE, 0.55f);
+        if (st.notice.empty()) text("Keine Änderungen – alles war schon aktuell.", 160, 80, 0.45f, C_WHITE, CENTER, 300);
+        float y = 30;
+        for (int r = 0; r < INFO_ROWS && st.infoScroll + r < int(st.notice.size()); r++, y += 16)
+            text(st.notice[size_t(st.infoScroll + r)], 8, y, 0.4f, st.infoScroll + r == 0 ? C_SEL : C_WHITE, LEFT, 304);
+        if (int(st.notice.size()) > INFO_ROWS) {
+            text(std::to_string(st.infoScroll + 1) + "–" + std::to_string(std::min<int>(st.infoScroll + INFO_ROWS, int(st.notice.size()))) + " von " +
+                     std::to_string(st.notice.size()), 160, 186, 0.36f, C_LIGHT, CENTER);
+            button(B_UP, "▲", C_BG2, C_WHITE, 0.6f);
+            button(B_DOWN, "▼", C_BG2, C_WHITE, 0.6f);
+            button(B_BACK_MID, "Weiter (A)", C_OK, C_WHITE, 0.5f);
+        } else {
+            button(B_BACK, "Weiter (A)", C_OK, C_WHITE, 0.55f);
+        }
         break;
     }
     case Screen::SaveMoves:
@@ -1200,6 +1218,7 @@ void release(State& st) {
     if (st.listOpen >= 0) st.entrySel = std::min(st.entrySel, int(st.list[size_t(st.listOpen)].pos.size()) - 1);
     st.notice = {std::to_string(n) + (n == 1 ? " Pokémon entlassen." : " Pokémon entlassen."), "Beim Spielen oder Beenden werden alle Spielstände aktualisiert.",
                  "Versehen? Beim Beenden „Verwerfen“ wählen, dann bleibt alles wie vorher."};
+    st.infoScroll = 0;
     st.screen = Screen::Info;
 }
 
@@ -1296,9 +1315,16 @@ void input(State& st, u32 down, const touchPosition& t) {
     }
 
     switch (st.screen) {
-    case Screen::Info:
-        if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.screen = Screen::Menu;
+    case Screen::Info: {
+        int maxScroll = std::max(0, int(st.notice.size()) - INFO_ROWS);
+        bool more = int(st.notice.size()) > INFO_ROWS;
+        if ((down & KEY_DDOWN) || (more && touch && B_DOWN.hit(t))) st.infoScroll = std::min(maxScroll, st.infoScroll + 1);
+        else if ((down & KEY_DUP) || (more && touch && B_UP.hit(t))) st.infoScroll = std::max(0, st.infoScroll - 1);
+        else if (down & KEY_DRIGHT) st.infoScroll = std::min(maxScroll, st.infoScroll + INFO_ROWS);
+        else if (down & KEY_DLEFT) st.infoScroll = std::max(0, st.infoScroll - INFO_ROWS);
+        else if ((touch && (more ? B_BACK_MID : B_BACK).hit(t)) || (down & (KEY_A | KEY_B))) st.screen = Screen::Menu;
         break;
+    }
     case Screen::SaveMoves:
         if ((touch && B_YES.hit(t)) || (down & KEY_A)) {
             st.message = "Schreibe Spielstände …";

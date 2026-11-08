@@ -50,6 +50,8 @@ struct WorldReport {
     std::vector<std::string> lines;
     int added = 0, updated = 0, released = 0, written = 0;
     int missing = 0; // fehlen in einem Spielstand (Pension o. Ä.), bleiben im Speicher
+    // Einzelheiten aus gespielten Spielständen („Platin: neu Sheinux Lv. 5“, „Platin: Karnimani → Tyracroc“ …)
+    std::vector<std::string> details;
 };
 
 // Protokoll (z. B. Datei auf der SD), wird bei jedem Schritt aufgerufen; nullptr = keins.
