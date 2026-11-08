@@ -42,28 +42,27 @@ Getestet mit den deutschen Fassungen auf einem New 2DS XL (Luma3DS) und in Azaha
 
 ## Daten erzeugen
 
-Namen, Symbole und Artdaten stammen aus den Spielen und werden deshalb nicht mitgeliefert. Das
-Werkzeug `monster-reise-daten.zip` (im Release) erzeugt sie aus deinen eigenen Spieldateien.
+Namen, Symbole und Artdaten stammen aus den Spielen und werden deshalb nicht mitgeliefert. Die Seite
+`monster-reise-daten.html` (im Release) erzeugt sie aus deinen eigenen Spieldateien. Einfach
+herunterladen und im Browser öffnen (Windows, Mac oder Linux). Es wird nichts installiert und nichts
+hochgeladen, alles passiert lokal im Browser.
 
-Benötigt wird [Node.js](https://nodejs.org/) (Version 20 oder neuer) und:
+Benötigt werden:
 
 - **Ultrasonne oder Ultramond** (Pflicht) als **entschlüsselte** CIA oder `.3ds`
 - optional für Gen 1/2: eine Virtual-Console-Fassung von Rot/Blau/Gelb und von
   Gold/Silber/Kristall, ebenfalls als entschlüsselte CIA
 
 Eigene Spiele sicherst du z. B. mit GodMode9: den Titel auswählen und „Build CIA (standard)“
-wählen. Meldet das Werkzeug, die Datei sei verschlüsselt, die CIA in GodMode9 zusätzlich mit
-„Decrypt file“ entschlüsseln. Wer Azahar benutzt, kann stattdessen einfach dessen SD-Ordner angeben,
-dort liegen installierte Spiele bereits entschlüsselt.
+wählen. Meldet die Seite, die Datei sei verschlüsselt, die CIA in GodMode9 zusätzlich mit
+„Decrypt file“ entschlüsseln. Wer Azahar benutzt, kann stattdessen einfach dessen SD-Ordner
+(`sdmc`) wählen, dort liegen installierte Spiele bereits entschlüsselt.
 
-Dann die Spieldateien auf `Daten erzeugen.bat` ziehen oder in der Konsole aufrufen:
+Die Dateien auf die Seite ziehen oder auswählen, die ZIP-Datei herunterladen, entpacken und den
+Ordner `pokemon-world-3d` ins Hauptverzeichnis der SD-Karte kopieren. **Diese Dateien nicht
+weitergeben oder hochladen.**
 
-```
-node daten.mjs "Ultramond.cia" "Blau VC.cia" "Kristall VC.cia"
-node daten.mjs "%APPDATA%\Azahar\sdmc"
-```
-
-Das Ergebnis liegt in `SD/pokemon-world-3d/`. **Diese Dateien nicht weitergeben oder hochladen.**
+(Am PC geht dasselbe auch per Node.js: `node tools/daten.mjs <Spieldateien …>`.)
 
 ## Ablage auf der SD-Karte
 

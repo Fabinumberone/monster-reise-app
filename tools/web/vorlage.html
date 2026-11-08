@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monster Reise Daten</title>
+<style>
+:root { --bg: #f4f6f8; --card: #fff; --text: #1d2430; --muted: #5d6878; --line: #d5dbe3; --accent: #1f8a7a; --accent-text: #fff; --err: #c0392b; --ok: #1e7e46; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14181e; --card: #1d232b; --text: #e6eaf0; --muted: #9aa5b4; --line: #333c48; --accent: #35b39f; --accent-text: #0e1418; --err: #ff7b6b; --ok: #5fd08e; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 720px; margin: 0 auto; padding: 32px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 24px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.card h2 { font-size: 1.05rem; margin: 0 0 8px; }
+ol, ul { margin: 0; padding-left: 1.3em; }
+li { margin: 4px 0; }
+#drop { border: 2px dashed var(--line); border-radius: 12px; padding: 28px 16px; text-align: center; transition: border-color .15s, background .15s; }
+#drop.hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.buttons { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+button, .btn { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); border-radius: 8px; padding: 8px 16px; cursor: pointer; text-decoration: none; display: inline-block; }
+button.ghost { background: transparent; color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+#log { font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; color: var(--muted); margin: 0; min-height: 1.5em; }
+#result { display: none; }
+.ok { color: var(--ok); font-weight: 600; }
+.err { color: var(--err); font-weight: 600; }
+.small { font-size: .9rem; color: var(--muted); }
+code { font: .9em ui-monospace, Menlo, Consolas, monospace; background: color-mix(in srgb, var(--muted) 15%, transparent); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Monster Reise Daten</h1>
+  <p class="sub">Erzeugt die Namen, Symbole und Artdaten für die Monster Reise App aus deinen eigenen Spielen. Alles passiert hier im Browser, es wird nichts hochgeladen.</p>
+
+  <div class="card">
+    <h2>Was du brauchst</h2>
+    <ul>
+      <li><b>Ultrasonne oder Ultramond</b> als entschlüsselte <code>.cia</code> oder <code>.3ds</code> (Pflicht)</li>
+      <li>für Gen 1/2: Rot, Blau oder Gelb und Gold, Silber oder Kristall aus der Virtual Console, ebenfalls als entschlüsselte <code>.cia</code></li>
+      <li>oder statt der Dateien: den SD-Ordner von Azahar (<code>sdmc</code>), dort liegen installierte Spiele schon entschlüsselt</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div id="drop">
+      <div>Spieldateien oder Ordner hierher ziehen</div>
+      <div class="buttons">
+        <button id="pickFiles">Dateien wählen</button>
+        <button id="pickDir" class="ghost">Ordner wählen</button>
+      </div>
+      <input id="files" type="file" multiple hidden>
+      <input id="dir" type="file" webkitdirectory multiple hidden>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Ablauf</h2>
+    <pre id="log">Noch keine Dateien gewählt.</pre>
+    <div id="result">
+      <p class="ok">Fertig.</p>
+      <p><a id="download" class="btn" download="monster-reise-daten.zip">ZIP herunterladen</a></p>
+      <ol>
+        <li>Die ZIP-Datei entpacken.</li>
+        <li>Den Ordner <code>pokemon-world-3d</code> ins Hauptverzeichnis der SD-Karte kopieren (neben <code>Nintendo 3DS</code>).</li>
+      </ol>
+      <p class="small">Die Dateien enthalten Daten aus deinen Spielen: bitte nicht weitergeben oder hochladen.</p>
+    </div>
+  </div>
+</main>
+<script>
+/*BIBLIOTHEKEN*/
+</script>
+<script>
+const logEl = document.getElementById('log'), result = document.getElementById('result');
+const log = s => { logEl.textContent += (logEl.textContent ? '\n' : '') + s; };
+let busy = false;
+
+async function run(files) {
+  if (busy || !files.length) return;
+  busy = true;
+  document.querySelectorAll('button').forEach(b => (b.disabled = true));
+  result.style.display = 'none';
+  logEl.textContent = `${files.length} Datei(en) werden durchsucht …`;
+  try {
+    const r = await erzeugeDaten(files, log);
+    const url = URL.createObjectURL(new Blob([r.zip], { type: 'application/zip' }));
+    document.getElementById('download').href = url;
+    if (!r.gen1 || !r.gen2) log('Hinweis: Ohne ' + [!r.gen1 && 'Gen-1', !r.gen2 && 'Gen-2'].filter(Boolean).join(' und ') + '-Spiel können diese Pokémon nicht reisen. Du kannst das später nachholen.');
+    result.style.display = 'block';
+  } catch (e) {
+    log('');
+    const p = document.createElement('span');
+    p.className = 'err';
+    p.textContent = e.message;
+    logEl.append(p);
+  } finally {
+    busy = false;
+    document.querySelectorAll('button').forEach(b => (b.disabled = false));
+  }
+}
+
+// Ordner beim Ziehen rekursiv einsammeln
+async function collect(entry, out) {
+  if (entry.isFile) { if (/\.(cia|3ds|cci|cxi|app)$/i.test(entry.name)) out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
+  const reader = entry.createReader();
+  for (;;) {
+    const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+    if (!batch.length) break;
+    for (const e of batch) await collect(e, out);
+  }
+}
+
+const drop = document.getElementById('drop');
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('hover'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
+drop.addEventListener('drop', async e => {
+  e.preventDefault();
+  drop.classList.remove('hover');
+  const items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!items.length) return run([...e.dataTransfer.files]);
+  const out = [];
+  for (const it of items) await collect(it, out);
+  run(out);
+});
+document.getElementById('pickFiles').onclick = () => document.getElementById('files').click();
+document.getElementById('pickDir').onclick = () => document.getElementById('dir').click();
+document.getElementById('files').onchange = e => run([...e.target.files]);
+document.getElementById('dir').onchange = e => run([...e.target.files]);
+</script>
+</body>
+</html>
