@@ -38,6 +38,9 @@ Getestet mit den deutschen Fassungen auf einem New 2DS XL (Luma3DS) und in Azaha
    immer auf die neueste Version zeigt:
    `https://github.com/Fabinumberone/monster-reise-app/releases/latest/download/monster-reise-app.cia`
    Updates werden genauso installiert; Speicher und Spielstände bleiben dabei erhalten.
+
+   <img src="docs/qr-cia.png" alt="QR-Code: neueste monster-reise-app.cia" width="220">
+
 3. **Daten erzeugen** (einmalig, siehe unten) und den Ordner `pokemon-world-3d` ins
    Hauptverzeichnis der SD-Karte kopieren.
 
