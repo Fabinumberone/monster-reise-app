@@ -1321,7 +1321,7 @@ constexpr size_t GBREC = 2 + 4 + 1 + 1 + 48 + 11 + 11;
 std::vector<uint8_t> Bank::serialize() const {
     std::vector<uint8_t> out(HEADER + (PARTY + BOXES * SLOTS) * ENTRY, 0);
     std::memcpy(out.data(), MAGIC, 8);
-    wr32(&out[8], 8);
+    wr32(&out[8], 9);
     wr16(&out[12], trainer.tid);
     wr16(&out[14], trainer.sid);
     out[16] = trainer.gender;
@@ -1462,6 +1462,19 @@ std::vector<uint8_t> Bank::serialize() const {
         }
     }
     out.insert(out.end(), v8.begin(), v8.end());
+    // Version 9: fehlende Pokémon (Eintrag, Spielstand)
+    std::vector<std::pair<uint16_t, const BankEntry*>> aw;
+    for (int i = 0; i < PARTY; i++) if (party[size_t(i)].used && party[size_t(i)].away()) aw.push_back({uint16_t(i), &party[size_t(i)]});
+    for (size_t i = 0; i < boxes.size(); i++) if (boxes[i].used && boxes[i].away()) aw.push_back({uint16_t(PARTY + i), &boxes[i]});
+    size_t t9 = out.size();
+    out.resize(t9 + 4 + aw.size() * 7, 0);
+    wr32(&out[t9], uint32_t(aw.size()));
+    for (size_t i = 0; i < aw.size(); i++) {
+        uint8_t* p = &out[t9 + 4 + i * 7];
+        wr16(p, aw[i].first);
+        wr32(p + 2, aw[i].second->awayLow);
+        p[6] = aw[i].second->awayMedia;
+    }
     return out;
 }
 
@@ -1486,9 +1499,9 @@ bool Bank::load(const std::string& path, std::string& err) {
     const int fileBoxes = version >= 5 ? BOXES : OLD_BOXES;
     const size_t base = HEADER + (PARTY + size_t(fileBoxes) * SLOTS) * ENTRY;
     fileVersion = version;
-    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 8 ||
+    if (in.size() < base || std::memcmp(in.data(), MAGIC, 8) != 0 || version < 1 || version > 9 ||
         (version == 1 && in.size() != base) || (version >= 2 && in.size() < base + 12)) {
-        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 8)";
+        err = path + " ist kein gemeinsamer Speicher (Version 1 bis 9)";
         return false;
     }
     items.clear();
@@ -1647,6 +1660,19 @@ bool Bank::load(const std::string& path, std::string& err) {
                         m.rec.assign(q, q + len);
                         q += len;
                         s->mons.push_back(std::move(m));
+                    }
+                }
+                if (version >= 9) { // fehlende Pokémon
+                    if (bad(4)) { err = path + ": Teil 9 beschädigt"; return false; }
+                    uint32_t n9 = rd32(q);
+                    q += 4;
+                    if (bad(size_t(n9) * 7)) { err = path + ": Teil 9 beschädigt"; return false; }
+                    for (uint32_t i = 0; i < n9; i++, q += 7) {
+                        uint16_t idx = rd16(q);
+                        BankEntry* e = idx < PARTY ? &party[idx] : (size_t(idx - PARTY) < boxes.size() ? &boxes[idx - PARTY] : nullptr);
+                        if (!e) continue;
+                        e->awayLow = rd32(q + 2);
+                        e->awayMedia = q[6];
                     }
                 }
             }
@@ -1997,6 +2023,8 @@ struct WorldImpl {
                 const WrittenMon& wm = slot.mons[size_t(wi)];
                 BankEntry* e = byUid(wm.uid);
                 if (!e) continue; // inzwischen entlassen
+                e->awayLow = 0;   // wieder da (z. B. aus der Pension abgeholt)
+                e->awayMedia = 0;
                 bool changed = f == Fmt::G67 ? recU64(g67Rec([&] { PK6 p; std::memcpy(p.d.data(), g.rec.data(), PK6_PARTY_SIZE); return p; }()), 8) != recU64(wm.rec, 8)
                                              : g.rec != wm.rec;
                 if (changed) {
@@ -2014,6 +2042,8 @@ struct WorldImpl {
             // Nicht von hier geschrieben: bekannt (z. B. im Spiel getauscht) oder neu
             PK6 pk = toPk7(w, g);
             if (BankEntry* ex = b.find(pk)) {
+                ex->awayLow = 0;
+                ex->awayMedia = 0;
                 uint32_t exp = expOf(w, g);
                 if (pk.exp() > ex->pk.exp() && !touched.count(ex->uid)) {
                     uint32_t uid = ex->uid;
@@ -2032,14 +2062,17 @@ struct WorldImpl {
             insertSorted(b.seen, monId(fresh.back().first.pk));
             added++;
         }
-        // Freigelassen: hier geschrieben, jetzt fehlend
+        // Hier geschrieben, jetzt fehlend: Pension, Resort, Kampfbox … oder freigelassen. Nicht löschen,
+        // sondern als „fehlt hier“ merken (wird nirgends geschrieben, bis es wieder auftaucht oder man es
+        // in der App entlässt).
+        int missing = 0;
         for (size_t i = 0; i < slot.mons.size(); i++) {
             if (usedW[i]) continue;
             BankEntry* e = byUid(slot.mons[i].uid);
-            if (!e) continue;
-            b.remember();
-            *e = BankEntry{};
-            released++;
+            if (!e || e->away()) continue;
+            e->awayLow = w.lowId;
+            e->awayMedia = w.media;
+            missing++;
         }
 
         // ----- Plätze -----
@@ -2104,11 +2137,12 @@ struct WorldImpl {
         rep.added += added;
         rep.updated += updated;
         rep.released += released;
-        if (added || updated || released) {
+        rep.missing += missing;
+        if (added || updated || released || missing) {
             std::string l = w.label + ":";
             if (added) l += " " + std::to_string(added) + " neu";
             if (updated) l += " " + std::to_string(updated) + " verändert";
-            if (released) l += " " + std::to_string(released) + " freigelassen";
+            if (missing) l += " " + std::to_string(missing) + " fehlen (Pension o. Ä.?)";
             rep.lines.push_back(l);
         }
     }
@@ -2118,9 +2152,9 @@ struct WorldImpl {
     struct View { std::vector<BankEntry*> team; std::vector<bool> borrowed; std::vector<BankEntry*> pc; };
     template <class Fits> View oldView(Fits fits, int capacity) {
         View v;
-        for (auto& e : b.party) if (e.used && fits(e.pk)) { v.team.push_back(&e); v.borrowed.push_back(false); }
+        for (auto& e : b.party) if (e.used && !e.away() && fits(e.pk)) { v.team.push_back(&e); v.borrowed.push_back(false); }
         std::vector<BankEntry*> cand;
-        for (auto& e : b.boxes) if (e.used && fits(e.pk)) cand.push_back(&e);
+        for (auto& e : b.boxes) if (e.used && !e.away() && fits(e.pk)) cand.push_back(&e);
         if (v.team.size() < Bank::PARTY) {
             std::vector<BankEntry*> byLevel = cand;
             std::stable_sort(byLevel.begin(), byLevel.end(), [&](BankEntry* x, BankEntry* y) {
@@ -2300,7 +2334,15 @@ struct WorldImpl {
             break;
         }
         }
-        // Geschriebenes merken
+        // Geschriebenes merken; Datensätze von Pokémon, die hier fehlen, aufbewahren (Wiedererkennung)
+        for (const WrittenMon& wm : slot.mons) {
+            BankEntry* e = byUid(wm.uid);
+            if (e && e->awayLow == w.lowId && e->awayMedia == w.media) {
+                WrittenMon keep = wm;
+                keep.flags |= 4;
+                written.push_back(std::move(keep));
+            }
+        }
         slot.items.clear();
         for (auto& it : b.items)
             if (it.written) slot.items.push_back({it.item, it.written});

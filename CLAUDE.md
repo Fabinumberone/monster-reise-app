@@ -118,7 +118,7 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 
 ## Nächste Schritte
 **Vorhaben (mit dem Nutzer abgestimmt 2026-11-08, Reihenfolge nach Vorschlag):**
-1. Pension/Resort u. Ä. auslesen: Pokémon dort dürfen beim Abgleich nicht als freigelassen gelten (derzeit Datenverlust-Risiko); mindestens Rückfrage statt sofort löschen.
+1. ~~Pension/Resort~~ **erledigt 2026-11-08**: Pokémon, die in einem gespielten Spielstand fehlen (Pension, Resort, Kampfbox, Fusion … oder freigelassen), werden nicht mehr gelöscht, sondern als „fehlt in <Spiel>“ gemerkt (BankEntry awayLow/awayMedia, Speicher Version 9). Sie werden in keinen Spielstand geschrieben (keine Doppelten), ihr geschriebener Datensatz bleibt beim Spielstand aufbewahrt (Flag 4) zur Wiedererkennung; tauchen sie wieder auf, wird übernommen (z. B. EP aus der Pension). Wirklich freigelassene entlässt man in der App (Liste). App zeigt „fehlt in …“ (PC, Liste) und einen Hinweis auf der Abgleich-Seite; „Doppelte entlassen“ lässt fehlende in Ruhe. Getestet an Kopien (PC: test-weg/test-zurueck): Glumanda in HG „in die Pension“ → fehlt, aus den anderen Spielen verschwunden; „abgeholt“ → wieder überall, danach ruhig. Pensionen werden nicht eigens ausgelesen (kein „in der Pension“-Text).
 2. Sicherungen in der App zurückspielen (Seite „Sicherungen“, je Spielstand die letzten 10 mit Datum).
 3. Abgleich-Seite blätterbar, Zusammenfassung („2 neu in Platin, Karnimani hat sich entwickelt“), Meldungen auch ins Protokoll.
 4. Suche/Filter in der Liste (Name, schillernd, hier nicht sichtbar, Level).

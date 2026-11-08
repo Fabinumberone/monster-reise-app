@@ -310,6 +310,7 @@ static void printBank(const Bank& bank) {
     std::printf("\n");
     auto line =[](const char* lbl, const BankEntry& e) {
         printPk(lbl, e.pk);
+        if (e.away()) std::printf("           FEHLT in %08X\n", unsigned(e.awayLow));
         std::printf("           %s%s%s  passt in: %s%s%s%s%s%s\n", e.inGame ? "im Spiel" : "nur im Speicher",
                     e.hasGen6 ? ", Gen-6-Stand" : "", e.hasGb ? ", GB-Stand" : "", fitsGB(e.pk, 1) ? "RBY " : "",
                     fitsGB(e.pk, 2) ? "GSC " : "", fitsIn(e.pk, GameKind::XY) ? "XY " : "",
@@ -900,10 +901,20 @@ int main(int argc, char** argv) {
     if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
     if (cmd == "abgleich" && argc >= 4) return cmdAbgleich(argc, argv);
     if (cmd == "welt" && argc >= 4) return cmdWelt(argc, argv);
-    if (cmd == "test-weg" && argc == 4) { // Test: Teammitglied entfernen (DS)
+    if (cmd == "test-weg" && argc == 4) { // Test: Teammitglied entfernen (DS), merkt es in <spielstand>.weg
         std::vector<uint8_t> d; std::string e; SaveNDS s;
         if (!readFile(argv[2], d) || !s.load(d, e)) return 1;
-        auto t = s.party(); t.erase(t.begin() + std::atoi(argv[3])); s.setParty(t);
+        auto t = s.party();
+        PK45 weg = t[size_t(std::atoi(argv[3]))];
+        std::ofstream(std::string(argv[2]) + ".weg", std::ios::binary).write(reinterpret_cast<const char*>(weg.d.data()), 236);
+        t.erase(t.begin() + std::atoi(argv[3])); s.setParty(t);
+        return writeNDS(argv[2], s) ? 0 : 1;
+    }
+    if (cmd == "test-zurueck" && argc == 3) { // Test: gemerktes Pokémon wieder ins Team (DS)
+        std::vector<uint8_t> d, w; std::string e; SaveNDS s;
+        if (!readFile(argv[2], d) || !s.load(d, e) || !readFile(std::string(argv[2]) + ".weg", w)) return 1;
+        PK45 pk; pk.gen = s.generation(); pk.party = true; std::memcpy(pk.d.data(), w.data(), 236);
+        auto t = s.party(); if (t.size() >= 6) t.pop_back(); t.push_back(pk); s.setParty(t);
         return writeNDS(argv[2], s) ? 0 : 1;
     }
     if (cmd == "test-ep" && argc == 5) return cmdTestEp(argv[2], std::atoi(argv[3]), std::atoi(argv[4]));

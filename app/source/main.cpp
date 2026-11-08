@@ -275,6 +275,10 @@ void commit(State& st, bool sync) {
         if (rep.released) l += ", " + std::to_string(rep.released) + " freigelassen";
         st.notice.push_back(l);
     }
+    if (rep.missing) {
+        st.notice.push_back("Fehlende Pokémon (Pension, Resort, Kampfbox …) bleiben im Speicher,");
+        st.notice.push_back("bis sie wieder auftauchen. Freigelassen? Dann in der Liste entlassen.");
+    }
 }
 
 // Beim Start: alle Spielstände lesen, Änderungen übernehmen, alle aktualisieren (world.hpp).
@@ -368,7 +372,17 @@ void buildList(State& st) {
     if (st.listOpen >= 0) st.entrySel = std::min(st.entrySel, int(st.list[size_t(st.listOpen)].pos.size()) - 1);
 }
 
+std::string gameTitle(const Game& g);
+
+// Name des Spielstands, in dem ein Pokémon fehlt
+std::string awayLabel(const State& st, const BankEntry& e) {
+    for (auto& s : st.installed)
+        if (s.game->lowId == e.awayLow && u8(s.media) == e.awayMedia) return gameTitle(*s.game) + (s.cart() ? " (Modul)" : "");
+    return "einem Spielstand";
+}
+
 std::string placeName(const State& st, int pos) {
+    if (entryAt(st, pos).away()) return "fehlt in " + awayLabel(st, entryAt(st, pos)) + " (Pension o. Ä.?)";
     if (pos < Bank::PARTY) return "Team " + std::to_string(pos + 1);
     int idx = pos - Bank::PARTY;
     std::string p = "Box " + std::to_string(idx / Bank::SLOTS + 1) + ", Platz " + std::to_string(idx % Bank::SLOTS + 1);
@@ -460,7 +474,7 @@ void drawTeam(const State& st) {
             rect(x, y, 188, 58, C_BG2);
             text("leer", x + 94, y + 20, 0.45f, C_LIGHT, CENTER);
         } else {
-            bool vis = visibleHere(st, e.pk);
+            bool vis = (!e.away() && visibleHere(st, e.pk));
             rect(x, y, 188, 58, vis ? C_CARD : C_CARD_DIM);
             drawIcon(e.pk, x + 2, y + 4, 1.0f, !vis);
             text(monName(e.pk), x + 46, y + 3, 0.52f, C_TEXT, LEFT, 110);
@@ -495,7 +509,7 @@ void drawPC(const State& st) {
         float x = 8 + (s % 6) * 46, y = 82 + (s / 6) * 31;
         rect(x, y, 44, 29, C_BG2);
         int idx = st.box * Bank::SLOTS + s;
-        if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !visibleHere(st, e.pk) || !slotVisibleHere(st, idx));
+        if (e.used) drawIcon(e.pk, x + 2, y - 1, 1.0f, !(!e.away() && visibleHere(st, e.pk)) || !slotVisibleHere(st, idx));
         if (st.held == Bank::PARTY + idx) frame(x, y, 44, 29, C_ERR, 3);
         if (s == st.cursor) frame(x, y, 44, 29, C_SEL);
     }
@@ -506,7 +520,7 @@ void drawPC(const State& st) {
         text("leer", 341, 130, 0.5f, C_MUTED, CENTER);
         return;
     }
-    bool vis = visibleHere(st, sel.pk) && slotVisibleHere(st, st.box * Bank::SLOTS + st.cursor);
+    bool vis = (!sel.away() && visibleHere(st, sel.pk)) && slotVisibleHere(st, st.box * Bank::SLOTS + st.cursor);
     drawIcon(sel.pk, 301, 52, 2.0f, !vis);
     text(monName(sel.pk), 341, 114, 0.5f, C_TEXT, CENTER, 96);
     if (!sel.pk.isEgg() && g_names.species(sel.pk.species()) != monName(sel.pk))
@@ -514,7 +528,8 @@ void drawPC(const State& st) {
     float y = 148;
     for (u16 m : sel.pk.moves())
         if (m) { text(g_names.move(m), 296, y, 0.4f, C_TEXT, LEFT, 92); y += 14; }
-    if (!vis) text("hier nicht sichtbar", 341, 218, 0.38f, C_ERR, CENTER, 96);
+    if (sel.away()) text("fehlt in " + awayLabel(st, sel), 341, 218, 0.36f, C_ERR, CENTER, 96);
+    else if (!vis) text("hier nicht sichtbar", 341, 218, 0.38f, C_ERR, CENTER, 96);
 }
 
 constexpr int BAG_ROWS = 10;
@@ -925,7 +940,7 @@ std::vector<int> duplicates(const State& st) {
     std::vector<int> out;
     for (int p = Bank::PARTY; p < total; p++) { // nur Boxen
         const BankEntry& e = entryAt(st, p);
-        if (!e.used || e.pk.isEgg() || e.pk.isShiny()) continue;
+        if (!e.used || e.pk.isEgg() || e.pk.isShiny() || e.away()) continue;
         if (best[key(e.pk)] != p) out.push_back(p);
     }
     return out;

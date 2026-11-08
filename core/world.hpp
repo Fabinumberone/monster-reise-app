@@ -49,6 +49,7 @@ struct WorldSave {
 struct WorldReport {
     std::vector<std::string> lines;
     int added = 0, updated = 0, released = 0, written = 0;
+    int missing = 0; // fehlen in einem Spielstand (Pension o. Ä.), bleiben im Speicher
 };
 
 // Protokoll (z. B. Datei auf der SD), wird bei jedem Schritt aufgerufen; nullptr = keins.

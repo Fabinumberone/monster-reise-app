@@ -27,6 +27,11 @@ namespace pw3d {
 struct BankEntry {
     bool used = false;
     uint32_t uid = 0;      // feste Kennung im Speicher (für die je Spielstand geschriebenen Datensätze)
+    // Fehlt seit dem letzten Abgleich in diesem Spielstand (Pension, Resort, Kampfbox … oder freigelassen):
+    // bleibt im Speicher, wird aber in keinen Spielstand geschrieben, bis es wieder auftaucht.
+    uint32_t awayLow = 0;
+    uint8_t awayMedia = 0;
+    bool away() const { return awayLow != 0; }
     bool inGame = false;   // beim letzten Ankommen ins aktuelle Spiel geschrieben
     bool hasGen6 = false;  // gen6 enthält den letzten Gen-6-Stand
     bool hasGb = false;    // gb enthält den letzten Gen-1/2-Stand (wie zuletzt geschrieben/gelesen)
@@ -48,7 +53,7 @@ struct BankEntry {
 // Was zuletzt in einen Spielstand geschrieben wurde (für „alle Spielstände aktuell“, world.hpp).
 struct WrittenMon {
     uint32_t uid = 0;
-    uint8_t flags = 0;          // 1 im Team, 2 geliehen (aus dem PC ins Team aufgefüllt)
+    uint8_t flags = 0;          // 1 im Team, 2 geliehen (aus dem PC ins Team aufgefüllt), 4 fehlt dort (aufbewahrt)
     std::vector<uint8_t> rec;   // Gen 6/7: Schlüssel + Prüfwert (16 Byte); sonst der Datensatz
 };
 
