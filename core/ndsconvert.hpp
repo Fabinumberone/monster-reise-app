@@ -37,6 +37,7 @@ std::string ndsTrainerName(const std::string& utf8);
 // Herkunftsspiel für Pokémon aus späteren Spielen: das häufigste der eigenen Pokémon, sonst nach Spiel.
 uint8_t ndsOriginVersion(const SaveNDS& s);
 
+const char* whyNotGen45(const PK6& pk7, NDSGame g); // nullptr = sichtbar
 bool fitsGen45(const PK6& pk7, NDSGame g);
 PK6 gen45ToPk7(const PK45& pk, const NDSContext& ctx);
 PK45 pk7ToGen45(const PK6& pk7, const PK45* snap, const NDSContext& ctx);

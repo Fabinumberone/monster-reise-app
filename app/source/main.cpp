@@ -156,6 +156,8 @@ struct State {
     std::vector<BackupSet> backups;       // Sicherungen, neueste zuerst
     int bkSel = 0, bkScroll = 0, bkStep = 0; // 0 Liste, 1 Frage, 2 zweite Bestätigung, 3 erledigt
     std::vector<std::string> bkResult;
+    bool detail = false;                  // Liste: Detailansicht des gewählten Pokémon
+    std::vector<std::pair<std::string, std::string>> detailRows; // Spiel, Ergebnis
     int listFilter = 0;                   // Liste: Filter (siehe FILTERS)
     std::string search;                   // Liste: Suche (Name oder Mindestlevel)
     int infoScroll = 0;                   // Abgleich-Seite: erste sichtbare Zeile
@@ -387,6 +389,32 @@ bool slotVisibleHere(const State& st, int idx) {
     const Game& g = *st.current->game;
     if (g.gen <= 2) return idx < gameBoxes(g) * 20;
     return idx / Bank::SLOTS < gameBoxes(g);
+}
+
+// Detailansicht: in welchen Spielen sichtbar, sonst warum nicht. Die Boxen sind nach Pokédex-Nummer
+// sortiert und werden der Reihe nach gefüllt, bis sie voll sind; deshalb zählt auch die Position.
+struct GameFamily { const char* name; int kind; int sub; int capacity; }; // kind: 1/2 GB, 3 GBA, 4/5 NDS, 6/7 Gen 6/7
+const GameFamily FAMILIES[] = {
+    {"Rot / Blau / Gelb", 1, 0, 12 * 20},
+    {"Gold / Silber / Kristall", 2, 0, 14 * 20},
+    {"Rubin / Saphir / Smaragd / FR / BG", 3, 0, 14 * 30},
+    {"Diamant / Perl", 4, int(NDSGame::DP), 18 * 30},
+    {"Platin", 4, int(NDSGame::Pt), 18 * 30},
+    {"HeartGold / SoulSilver", 4, int(NDSGame::HGSS), 18 * 30},
+    {"Schwarz / Weiß", 5, int(NDSGame::BW), 24 * 30},
+    {"Schwarz 2 / Weiß 2", 5, int(NDSGame::B2W2), 24 * 30},
+    {"X / Y", 6, int(GameKind::XY), 31 * 30},
+    {"Omega Rubin / Alpha Saphir", 6, int(GameKind::ORAS), 31 * 30},
+    {"Sonne / Mond", 7, int(GameKind::SM), 32 * 30},
+    {"Ultrasonne / Ultramond", 7, int(GameKind::USUM), 32 * 30},
+};
+const char* whyNotFamily(const GameFamily& g, const PK6& pk) {
+    switch (g.kind) {
+    case 1: case 2: return whyNotGB(pk, g.kind);
+    case 3: return whyNotGen3(pk);
+    case 4: case 5: return whyNotGen45(pk, NDSGame(g.sub));
+    default: return whyNotIn(pk, GameKind(g.sub));
+    }
 }
 
 BankEntry& entryAt(State& st, int pos) { return pos < Bank::PARTY ? st.bank.party[size_t(pos)] : st.bank.boxes[size_t(pos - Bank::PARTY)]; }
@@ -664,6 +692,22 @@ void drawList(const State& st) {
         return;
     }
     const ListGroup& g = st.list[size_t(st.listOpen)];
+    if (st.detail) {
+        const BankEntry& e = entryAt(st, g.pos[size_t(st.entrySel)]);
+        drawIcon(e.pk, 8, 30, 1.0f, false);
+        std::string name = monName(e.pk) + (e.pk.isShiny() ? " ★" : "");
+        if (!e.pk.isEgg()) name += "  Lv. " + std::to_string(levelOf(e.pk));
+        text(name, 54, 32, 0.5f, C_WHITE, LEFT, 330);
+        text(std::string("aus ") + gameOfVersion(e.pk.version()) + "   OT " + e.pk.otName() + "   " + placeName(st, g.pos[size_t(st.entrySel)]), 54, 50, 0.38f, C_LIGHT, LEFT, 340);
+        float y = 72;
+        for (size_t i = 0; i < st.detailRows.size(); i++, y += 12.5f) {
+            bool ok = st.detailRows[i].second.rfind("ja", 0) == 0;
+            text(st.detailRows[i].first, 10, y, 0.36f, C_WHITE, LEFT, 170);
+            text(st.detailRows[i].second, 186, y, 0.36f, ok ? C_OK : C_ERR, LEFT, 208);
+        }
+        text("B: zurück", 392, 226, 0.36f, C_LIGHT, RIGHT);
+        return;
+    }
     char nr[8];
     std::snprintf(nr, sizeof nr, "%03u", unsigned(g.species));
     text(std::string(g.species ? nr : "") + " " + (g.species ? g_names.species(g.species) : std::string("Eier")) + "  ×" +
@@ -687,7 +731,7 @@ void drawList(const State& st) {
         text(placeName(st, g.pos[size_t(i)]), 54, y + 19, 0.38f, m, LEFT, 220);
         text(mk ? std::string("wird entlassen") : "OT " + e.pk.otName(), 386, y + 19, 0.38f, mk ? C_ERR : m, RIGHT, 110);
     }
-    if (st.marked.empty()) text("A: zum Entlassen markieren   B: zurück", 392, 226, 0.38f, C_LIGHT, RIGHT);
+    if (st.marked.empty()) text("A: zum Entlassen markieren   X: Details   B: zurück", 392, 226, 0.36f, C_LIGHT, RIGHT);
     else text("A: markieren   SELECT: " + std::to_string(st.marked.size()) + " markierte entlassen   B: zurück", 392, 226, 0.36f, C_ERR, RIGHT, 384);
 }
 
@@ -1258,7 +1302,30 @@ void searchList(State& st) {
     if (swkbdInputText(&kb, buf, sizeof buf) == SWKBD_BUTTON_CONFIRM) st.search = buf;
 }
 
+void openDetail(State& st) {
+    int pos = st.list[size_t(st.listOpen)].pos[size_t(st.entrySel)];
+    const BankEntry& e = entryAt(st, pos);
+    st.detailRows.clear();
+    for (const GameFamily& g : FAMILIES) {
+        std::string res;
+        if (e.away()) res = "fehlt in " + awayLabel(st, e);
+        else if (const char* why = whyNotFamily(g, e.pk)) res = std::string("nein – ") + why;
+        else if (pos < Bank::PARTY) res = "ja (Team)";
+        else {
+            int rank = 0; // passende Pokémon davor in den Boxen
+            for (int i = 0; i < pos - Bank::PARTY; i++) {
+                const BankEntry& o = st.bank.boxes[size_t(i)];
+                if (o.used && !o.away() && !whyNotFamily(g, o.pk)) rank++;
+            }
+            res = rank < g.capacity ? "ja" : "nein – Boxen voll (Platz " + std::to_string(rank + 1) + " von " + std::to_string(g.capacity) + ")";
+        }
+        st.detailRows.push_back({g.name, res});
+    }
+    st.detail = true;
+}
+
 void openList(State& st) {
+    st.detail = false;
     st.held = -1;
     st.marked.clear();
     st.view = View::List;
@@ -1344,7 +1411,9 @@ void listInput(State& st, u32 down) {
         if (down & KEY_A) { st.listOpen = st.listSel; st.entrySel = 0; }
         return;
     }
+    if (st.detail) { if (down & (KEY_A | KEY_B | KEY_X)) st.detail = false; return; }
     int n = int(st.list[size_t(st.listOpen)].pos.size());
+    if (down & KEY_X) { openDetail(st); return; }
     if (down & KEY_DDOWN) st.entrySel = std::min(n - 1, st.entrySel + 1);
     if (down & KEY_DUP) st.entrySel = std::max(0, st.entrySel - 1);
     if (down & KEY_B) st.listOpen = -1;
@@ -1468,7 +1537,7 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (!st.marked.empty()) { st.releaseStep = 0; st.screen = Screen::Release; }
             else if (st.listOpen < 0) st.screen = Screen::Dupes;
         } else if (st.view == View::List && st.listOpen < 0 && !st.marked.empty() && (down & KEY_X)) st.marked.clear();
-        else if (st.view == View::List && (down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT))) listInput(st, down);
+        else if (st.view == View::List && ((down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT)) || (st.listOpen >= 0 && (down & KEY_X)))) listInput(st, down);
         else if (st.view != View::Bag && st.view != View::List && (down & KEY_A)) pickOrDrop(st);
         else if (down & KEY_B) st.held = -1;
         else if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) { st.held = -1; startTravel(st); }

@@ -144,17 +144,19 @@ uint8_t ndsOriginVersion(const SaveNDS& s) {
     }
 }
 
-bool fitsGen45(const PK6& pk, NDSGame g) {
+const char* whyNotGen45(const PK6& pk, NDSGame g) {
     Limits L = limitsOf(g);
     uint16_t s = pk.species();
-    if (s == 0 || s > L.species) return false;
-    if (pk.isEgg() && (pk.version() == 0 || pk.version() > L.maxVersion)) return false; // Eier nur aus dieser oder älterer Gen
-    if (!formAllowed(s, pk.form(), g)) return false;
+    if (s == 0 || s > L.species) return "Art gibt es dort nicht";
+    if (pk.isEgg() && (pk.version() == 0 || pk.version() > L.maxVersion)) return "Ei aus einer neueren Generation";
+    if (!formAllowed(s, pk.form(), g)) return "Form gibt es dort nicht";
     for (uint16_t m : pk.moves())
-        if (m > L.move) return false;
-    if (pk.heldItem() > L.item) return false;
-    return true;
+        if (m > L.move) return "kennt eine neuere Attacke";
+    if (pk.heldItem() > L.item) return "trägt ein neueres Item";
+    return nullptr;
 }
+
+bool fitsGen45(const PK6& pk, NDSGame g) { return whyNotGen45(pk, g) == nullptr; }
 
 PK6 gen45ToPk7(const PK45& n, const NDSContext& ctx) {
     uint16_t species = n.species();

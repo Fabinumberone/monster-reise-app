@@ -151,16 +151,18 @@ uint8_t versionFromFileName(const std::string& fn) {
     return 0;
 }
 
-bool fitsGen3(const PK6& pk) {
+const char* whyNotGen3(const PK6& pk) {
     uint16_t s = pk.species();
-    if (s == 0 || s > 386) return false;
-    if (pk.isEgg() && !isGen3Version(pk.version())) return false;
-    if (pk.form() != 0 && s != 201 && s != 386) return false; // Alola-Formen, Kappen-Pikachu, Proto-Formen …
+    if (s == 0 || s > 386) return "Art gibt es dort nicht";
+    if (pk.isEgg() && !isGen3Version(pk.version())) return "Ei aus einer anderen Generation";
+    if (pk.form() != 0 && s != 201 && s != 386) return "Form gibt es dort nicht"; // Alola-Formen, Kappen-Pikachu, Proto-Formen …
     for (uint16_t m : pk.moves())
-        if (m > 354) return false;
-    if (pk.heldItem() && !modernItemToGen3(pk.heldItem())) return false;
-    return true;
+        if (m > 354) return "kennt eine neuere Attacke";
+    if (pk.heldItem() && !modernItemToGen3(pk.heldItem())) return "trägt ein neueres Item";
+    return nullptr;
 }
+
+bool fitsGen3(const PK6& pk) { return whyNotGen3(pk) == nullptr; }
 
 PK6 gen3ToPk7(const PK3& g, const GBAContext& ctx) {
     uint16_t species = g.species();

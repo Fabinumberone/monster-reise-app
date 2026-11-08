@@ -109,28 +109,30 @@ PK6 toGen6(const PK6& in) {
     return pk;
 }
 
-bool fitsIn(const PK6& pk, GameKind k) {
+const char* whyNotIn(const PK6& pk, GameKind k) {
     Limits L = limitsOf(k);
     uint16_t sp = pk.species();
-    if (sp == 0 || sp > L.species) return false;
-    if (pk.heldItem() > L.item) return false;
-    if (pk.ability() > L.ability) return false;
-    if (pk.d[0xDC] > L.ball) return false;
-    if (pk.version() > L.maxVersion) return false;
-    if (pk.isEgg() && pk.version() >= 1 && pk.version() <= 23) return false; // Eier aus Gen 3–5 bleiben dort
+    if (sp == 0 || sp > L.species) return "Art gibt es dort nicht";
+    if (pk.heldItem() > L.item) return "trägt ein neueres Item";
+    if (pk.ability() > L.ability) return "neuere Fähigkeit";
+    if (pk.d[0xDC] > L.ball) return "neuerer Ball";
+    if (pk.version() > L.maxVersion) return "aus einem neueren Spiel";
+    if (pk.isEgg() && pk.version() >= 1 && pk.version() <= 23) return "Ei aus Gen 3–5";
     for (int i = 0; i < 4; i++) {
-        if (rd16(pk.d.data() + 0x5A + i * 2) > L.move) return false; // Attacken
-        if (rd16(pk.d.data() + 0x6A + i * 2) > L.move) return false; // Grundattacken
+        if (rd16(pk.d.data() + 0x5A + i * 2) > L.move) return "kennt eine neuere Attacke";
+        if (rd16(pk.d.data() + 0x6A + i * 2) > L.move) return "neuere Grundattacke";
     }
     uint8_t f = pk.form();
-    if (kindGeneration(k) == 6 && f > 0 && hasAlolanForm(sp)) return false;
+    if (kindGeneration(k) == 6 && f > 0 && hasAlolanForm(sp)) return "Alola-Form";
     if (k == GameKind::SM) { // Formen, die erst USUM hat
-        if (sp == 800 && f > 0) return false; // Necrozma Abendmähne/Morgenschwingen/Ultra
-        if (sp == 744 && f > 0) return false; // Wuffels mit Tempomacher
-        if (sp == 745 && f == 2) return false; // Wolwerock Zwielichtform
+        if (sp == 800 && f > 0) return "Form erst in USUM"; // Necrozma Abendmähne/Morgenschwingen/Ultra
+        if (sp == 744 && f > 0) return "Form erst in USUM"; // Wuffels mit Tempomacher
+        if (sp == 745 && f == 2) return "Form erst in USUM"; // Wolwerock Zwielichtform
     }
-    return true;
+    return nullptr;
 }
+
+bool fitsIn(const PK6& pk, GameKind k) { return whyNotIn(pk, k) == nullptr; }
 
 void restoreGen6Only(PK6& pk6, const PK6& last) {
     uint8_t* d = pk6.d.data();

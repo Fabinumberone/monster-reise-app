@@ -37,6 +37,7 @@ uint16_t gen3ItemToModern(uint16_t id);
 uint16_t modernItemToGen3(uint16_t id); // 0 = keine Entsprechung
 
 // Kann das Pokémon (Gen-7-Form) in einem Gen-3-Spiel erscheinen?
+const char* whyNotGen3(const PK6& pk7); // nullptr = sichtbar
 bool fitsGen3(const PK6& pk7);
 
 // Herkunftsspiel für Pokémon aus späteren Spielen: das häufigste der eigenen Pokémon im Spielstand,

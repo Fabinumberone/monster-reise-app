@@ -23,6 +23,8 @@ PK6 toGen6(const PK6& pk7);
 
 // Kann dieses Pokémon (Gen-7-Form) im Spiel k existieren? Art, Form, Attacken, Item,
 // Fähigkeit, Ball und Herkunftsspiel werden gegen die Grenzen des Spiels geprüft.
+// Grund, warum das Pokémon in diesem Spiel nicht angezeigt wird (nullptr = sichtbar).
+const char* whyNotIn(const PK6& pk7, GameKind k);
 bool fitsIn(const PK6& pk7, GameKind k);
 
 // Bytebereiche, die nur in einer Generation Bedeutung haben. Beim Hin- und Herreisen werden

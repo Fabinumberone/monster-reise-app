@@ -103,15 +103,19 @@ uint32_t gbKey(const GBMon& m) {
     return h;
 }
 
-bool fitsGB(const PK6& pk, int gen) {
+const char* whyNotGB(const PK6& pk, int gen) {
     uint16_t s = pk.species();
-    if (s == 0 || s > (gen == 1 ? 151 : 251) || pk.isEgg()) return false;
-    if (pk.form() != 0 && s != 201) return false; // Alola-Formen, Kappen-Pikachu …
+    if (pk.isEgg()) return "Ei";
+    if (s == 0 || s > (gen == 1 ? 151 : 251)) return "Art gibt es dort nicht";
+    if (pk.form() != 0 && s != 201) return "Form gibt es dort nicht"; // Alola-Formen, Kappen-Pikachu …
     uint16_t maxMove = gen == 1 ? 165 : 251;
     for (uint16_t mv : pk.moves())
-        if (mv > maxMove) return false;
-    return pk.moves()[0] != 0;
+        if (mv > maxMove) return "kennt eine neuere Attacke";
+    if (pk.moves()[0] == 0) return "keine Attacke";
+    return nullptr;
 }
+
+bool fitsGB(const PK6& pk, int gen) { return whyNotGB(pk, gen) == nullptr; }
 
 void refreshParty7(PK6& pk, const SpeciesData& sp) {
     const SpeciesInfo& si = sp.get(pk.species());

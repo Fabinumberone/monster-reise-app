@@ -34,6 +34,7 @@ struct GBContext {
 uint32_t gbKey(const GBMon& m);
 
 // Kann das Pokémon (Gen-7-Form) in diesem GB-Spiel erscheinen?
+const char* whyNotGB(const PK6& pk7, int gen); // nullptr = sichtbar
 bool fitsGB(const PK6& pk7, int gen);
 
 PK6 gbToPk7(const GBMon& m, const GBContext& ctx);
