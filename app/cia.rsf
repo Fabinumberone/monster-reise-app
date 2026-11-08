@@ -147,6 +147,7 @@ AccessControlInfo:
    - hid:USER
    - ndm:u
    - ptm:u
+   - soc:U
 
 SystemControlInfo:
   SaveDataSize: 0KB

@@ -43,6 +43,10 @@ ICON		:=	assets/icon.png
 APP_TITLE	:=	Monster Reise App
 APP_DESCRIPTION	:=	Ein Spielstand für alle Regionen
 APP_AUTHOR	:=	Fabi
+# Version: bei jedem Release erhöhen (Tag vX.Y.Z, der Updater vergleicht damit)
+VERSION_MAJOR	:=	0
+VERSION_MINOR	:=	3
+VERSION_MICRO	:=	0
 #GFXBUILD	:=	$(ROMFS)/gfx
 
 #---------------------------------------------------------------------------------
@@ -54,20 +58,20 @@ CFLAGS	:=	-g -Wall -O2 -mword-relocations \
 			-ffunction-sections \
 			$(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -D__3DS__
+CFLAGS	+=	$(INCLUDE) -D__3DS__ -DAPP_VERSION=\"$(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)\"
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lcitro2d -lcitro3d -lctru -lm
+LIBS	:= -lcitro2d -lcitro3d -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru -lm
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:= $(CTRULIB)
+LIBDIRS	:= $(PORTLIBS) $(CTRULIB)
 
 
 #---------------------------------------------------------------------------------
@@ -175,7 +179,8 @@ cia: all
 	@$(CIATOOLS)/bannertool.exe makebanner -i assets/banner.png -a assets/banner.wav -o $(BUILD)/banner.bnr
 	@# Icon: das SMDH von smdhtool (bannertool makesmdh scheitert unter Windows am „é“)
 	@$(CIATOOLS)/makerom.exe -f cia -o $(TARGET).cia -target t -exefslogo -elf $(TARGET).elf -rsf cia.rsf \
-		-banner $(BUILD)/banner.bnr -icon $(TARGET).smdh
+		-banner $(BUILD)/banner.bnr -icon $(TARGET).smdh \
+		-major $(VERSION_MAJOR) -minor $(VERSION_MINOR) -micro $(VERSION_MICRO)
 	@echo built ... $(TARGET).cia
 
 $(BUILD):
@@ -219,6 +224,11 @@ $(OUTPUT).elf	:	$(OFILES)
 #---------------------------------------------------------------------------------
 %.bin.o	%_bin.h :	%.bin
 #---------------------------------------------------------------------------------
+	@echo $(notdir $<)
+	@$(bin2o)
+
+# CA-Bündel für HTTPS (Updater)
+%.pem.o	%_pem.h :	%.pem
 	@echo $(notdir $<)
 	@$(bin2o)
 

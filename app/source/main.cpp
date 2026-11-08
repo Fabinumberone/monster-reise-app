@@ -28,6 +28,7 @@
 #include "nds.hpp"
 #include "ndsconvert.hpp"
 #include "icons.hpp"
+#include "updater.hpp"
 #include "species.hpp"
 #include "items.hpp"
 #include "names.hpp"
@@ -122,7 +123,7 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error };
+enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error, Update };
 enum class View { Team, PC, Bag, List };
 
 // Liste: alle Pokémon nach Nationaldex-Nummer gruppiert (Positionen wie State::held).
@@ -143,6 +144,8 @@ struct State {
     int listOpen = -1, entrySel = 0;      // geöffnete Art und gewähltes Pokémon darin
     std::set<int> marked;                 // zum Entlassen markiert (Positionen, über Arten hinweg)
     bool dupeShiny = false;               // „Doppelte“: schillernde Pokémon einbeziehen
+    std::string updVersion;              // neueste Version auf GitHub
+    bool updDone = false;                 // Update installiert
     int releaseStep = 0;                  // Entlassen: 0 erste Frage, 1 zweite Bestätigung (mit Y)
     std::string bankErr;
     std::vector<SaveSlot> installed;
@@ -456,6 +459,7 @@ std::string money(u32 v) { // 99999 -> 99.999
 void drawHeader(const State& st) {
     rect(0, 0, 400, 26, C_HEAD);
     text("Monster Reise App", 8, 4, 0.6f, C_WHITE);
+    text("v" APP_VERSION, 166, 8, 0.4f, C_LIGHT);
     if (st.current) {
         u32 rc = regionColor(st.current->game->region);
         std::string r = std::string(st.current->game->region) + " · " + st.current->label();
@@ -652,7 +656,7 @@ void button(const Button& b, const std::string& label, u32 bg, u32 fg, float siz
 }
 
 const Button B_TRAVEL{8, 32, 304, 44}, B_TEAM{8, 82, 148, 42}, B_PC{164, 82, 148, 42}, B_BAG{8, 128, 148, 42}, B_LIST{164, 128, 148, 42};
-const Button B_EXIT{8, 196, 304, 36}, B_BACK{8, 200, 304, 32};
+const Button B_EXIT{164, 196, 148, 36}, B_UPDATE{8, 196, 148, 36}, B_BACK{8, 200, 304, 32};
 const Button B_YES{8, 186, 148, 46}, B_NO{164, 186, 148, 46};
 const Button B_SHINY{8, 140, 304, 36};
 const Button B_YES2{164, 186, 148, 46}, B_NO2{8, 186, 148, 46}; // zweite Bestätigung: Seiten getauscht
@@ -709,6 +713,7 @@ void drawBottom(const State& st) {
         button(B_BAG, "Beutel", st.view == View::Bag ? C_SEL : C_BG2, st.view == View::Bag ? C_TEXT : C_WHITE, 0.7f);
         button(B_LIST, "Liste", st.view == View::List ? C_SEL : C_BG2, st.view == View::List ? C_TEXT : C_WHITE, 0.7f);
         text("X: Spielen  Y: Ansicht  L/R: Box  A: umräumen", 160, 178, 0.4f, st.dirty ? C_SEL : C_LIGHT, CENTER, 304);
+        button(B_UPDATE, "Update", C_BG2, C_LIGHT, 0.55f);
         button(B_EXIT, "Beenden", C_BG2, C_LIGHT, 0.55f);
         break;
     case Screen::Done: break;
@@ -823,6 +828,27 @@ void drawBottom(const State& st) {
         button(B_YES, "Starten (A)", C_OK, C_WHITE, 0.55f);
         button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.55f);
         break;
+    case Screen::Update: {
+        text("Update", 160, 4, 0.6f, C_WHITE, CENTER);
+        if (st.updDone) {
+            text("Update auf Version " + st.updVersion + " installiert.", 160, 60, 0.5f, C_OK, CENTER, 300);
+            text("Die App wird jetzt beendet.", 160, 90, 0.45f, C_WHITE, CENTER, 300);
+            text("Danach einfach wieder starten.", 160, 108, 0.45f, C_WHITE, CENTER, 300);
+            button(B_BACK, "Beenden (A)", C_OK, C_WHITE, 0.55f);
+        } else if (updater::isNewer(st.updVersion, APP_VERSION)) {
+            text("Neue Version " + st.updVersion + " verfügbar", 160, 50, 0.55f, C_WHITE, CENTER, 300);
+            text("Installiert: " APP_VERSION, 160, 76, 0.45f, C_LIGHT, CENTER, 300);
+            text("Speicher und Spielstände bleiben erhalten.", 160, 104, 0.42f, C_LIGHT, CENTER, 300);
+            text("Danach startest du die App neu.", 160, 120, 0.42f, C_LIGHT, CENTER, 300);
+            button(B_YES, "Installieren (A)", C_OK, C_WHITE, 0.5f);
+            button(B_NO, "Später (B)", C_BG2, C_WHITE, 0.5f);
+        } else {
+            text("Du hast die neueste Version.", 160, 70, 0.5f, C_WHITE, CENTER, 300);
+            text("Installiert: " APP_VERSION + std::string(", auf GitHub: ") + st.updVersion, 160, 96, 0.42f, C_LIGHT, CENTER, 300);
+            button(B_BACK, "Zurück (B)", C_BG2, C_WHITE, 0.55f);
+        }
+        break;
+    }
     case Screen::Busy: {
         text("Bitte warten", 160, 4, 0.6f, C_WHITE, CENTER);
         text(st.message, 160, 100, 0.5f, C_WHITE, CENTER, 300);
@@ -894,6 +920,50 @@ void doLaunch(State& st) {
                      ? std::string("Alles aktuell\nStarte jetzt ") + launcherName(*st.target) + " und lade\n" + gameTitle(*st.target->game) + "."
                      : std::string("Spiel konnte nicht gestartet werden\nBitte starte ") + st.target->label() + " selbst.";
     st.screen = Screen::Error;
+}
+
+// ---------- Update ----------
+void checkUpdate(State& st) {
+    if (st.dirty) {
+        st.message = "Erst Änderungen übernehmen\nUmräumen oder Entlassen ist noch nicht gespeichert.\nBitte erst spielen oder beenden („Übernehmen“).";
+        st.screen = Screen::Error;
+        return;
+    }
+    st.message = "Suche nach Updates …";
+    st.screen = Screen::Busy;
+    render(st);
+    std::string err;
+    if (!updater::init(err) || !updater::latestVersion(st.updVersion, err)) {
+        logLine("Update: " + err);
+        st.message = "Update nicht möglich\n" + err;
+        st.screen = Screen::Error;
+        return;
+    }
+    logLine("Update: installiert " APP_VERSION ", GitHub " + st.updVersion);
+    st.updDone = false;
+    st.screen = Screen::Update;
+}
+
+void installUpdate(State& st) {
+    st.screen = Screen::Busy;
+    st.message = "Lade Update …";
+    render(st);
+    std::string err;
+    bool ok = updater::downloadAndInstall([&](double now, double total) {
+        char b[64];
+        if (total > 0) std::snprintf(b, sizeof b, "Lade Update … %d %%  (%.1f MB)", int(now * 100 / total), total / 1048576.0);
+        else std::snprintf(b, sizeof b, "Lade Update … %.1f MB", now / 1048576.0);
+        st.message = b;
+        render(st);
+    }, err);
+    logLine(ok ? "Update installiert: " + st.updVersion : "Update fehlgeschlagen: " + err);
+    if (!ok) {
+        st.message = "Update fehlgeschlagen\n" + err + "\nDie bisherige Version bleibt installiert.";
+        st.screen = Screen::Error;
+        return;
+    }
+    st.updDone = true;
+    st.screen = Screen::Update;
 }
 
 void requestQuit(State& st) {
@@ -1069,6 +1139,13 @@ void input(State& st, u32 down, const touchPosition& t) {
         else if ((touch && B_SHINY.hit(t)) || (down & KEY_X)) st.dupeShiny = !st.dupeShiny;
         else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
         break;
+    case Screen::Update:
+        if (st.updDone) { if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.quit = true; }
+        else if (updater::isNewer(st.updVersion, APP_VERSION)) {
+            if ((touch && B_YES.hit(t)) || (down & KEY_A)) installUpdate(st);
+            else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
+        } else if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.screen = Screen::Menu;
+        break;
     case Screen::Release:
         // Zweimal bestätigen: erst A, dann Y (Knopf auf der anderen Seite), damit nichts aus Versehen passiert.
         if (st.releaseStep == 0) {
@@ -1093,6 +1170,7 @@ void input(State& st, u32 down, const touchPosition& t) {
         else if (touch && B_BAG.hit(t)) st.view = View::Bag;
         else if (touch && B_LIST.hit(t)) openList(st);
         else if (touch && B_EXIT.hit(t)) requestQuit(st);
+        else if (touch && B_UPDATE.hit(t)) checkUpdate(st);
         break;
     case Screen::Travel: {
         if (st.travelRegion < 0) {
@@ -1166,6 +1244,7 @@ int main() {
         render(st);
     }
 
+    updater::exit();
     C2D_TextBufDelete(g_buf);
     C2D_Fini();
     C3D_Fini();
