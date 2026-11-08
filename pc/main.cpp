@@ -27,6 +27,7 @@
 #include "../core/savefile.hpp"
 #include "../core/sync.hpp"
 #include "../core/world.hpp"
+#include "../core/evolve.hpp"
 
 using namespace pw3d;
 
@@ -902,6 +903,32 @@ int main(int argc, char** argv) {
     if (cmd == "reise" && argc == 5) return cmdReise(argv[2], argv[3], argv[4]);
     if (cmd == "abgleich" && argc >= 4) return cmdAbgleich(argc, argv);
     if (cmd == "welt" && argc >= 4) return cmdWelt(argc, argv);
+    if (cmd == "test-entwickeln" && argc >= 3) { // nur lesen: zeigt, was eine Tauschentwicklung ändern würde
+        Bank bank;
+        bank.species = &g_species;
+        std::string err;
+        if (!bank.load(argv[2], err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        std::printf("%zu Tauschentwicklungen in arten.bin\n", g_species.tradeEvos().size());
+        int shown = 0;
+        std::vector<const BankEntry*> all;
+        for (auto& e : bank.party) all.push_back(&e);
+        for (auto& e : bank.boxes) all.push_back(&e);
+        for (const BankEntry* ep : all) {
+                const BankEntry& e = *ep;
+                if (!e.used || shown >= 12) continue;
+                auto opts = tradeOptions(e.pk, g_species);
+                if (opts.empty()) continue;
+                PK6 pk = e.pk;
+                std::string before = pk.nickname();
+                unsigned ab = pk.ability(), item = pk.heldItem();
+                applyTradeEvolution(pk, opts[0], g_species, g_names);
+                std::printf("%-12s -> %-12s Art %u -> %u  Fähigkeit %u -> %u  Item %u -> %u  Methode %u  Prüfsumme %s\n", before.c_str(),
+                            pk.nickname().c_str(), e.pk.species(), pk.species(), ab, unsigned(pk.ability()), item, unsigned(pk.heldItem()),
+                            unsigned(opts[0].method), pk.checksumValid() ? "ok" : "FALSCH");
+                shown++;
+            }
+        return 0;
+    }
     if (cmd == "test-weg" && argc == 4) { // Test: Teammitglied entfernen (DS), merkt es in <spielstand>.weg
         std::vector<uint8_t> d; std::string e; SaveNDS s;
         if (!readFile(argv[2], d) || !s.load(d, e)) return 1;

@@ -29,6 +29,7 @@
 #include "ndsconvert.hpp"
 #include "icons.hpp"
 #include "updater.hpp"
+#include "evolve.hpp"
 #include "species.hpp"
 #include "items.hpp"
 #include "names.hpp"
@@ -123,7 +124,7 @@ void drawIcon(const PK6& pk, float x, float y, float scale, bool dim) {
 }
 
 // ---------- Zustand ----------
-enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error, Update, Backups };
+enum class Screen { Menu, Info, SaveMoves, Release, Dupes, Travel, Confirm, Busy, Done, Error, Update, Backups, Evolve };
 
 // Ein Sicherungsstand: alle Dateien mit derselben Zeit (ein Abgleich bzw. ein Schreibvorgang)
 struct BackupSet {
@@ -161,6 +162,10 @@ struct State {
     int dexScroll = 0;
     std::vector<std::string> journal;     // Reisetagebuch (neueste zuerst)
     int journalScroll = 0;
+    // Tauschentwicklung: Pokémon, gewählte Möglichkeit, Partner (Laukaps/Schnuthelm, sonst -1)
+    int evoPos = -1, evoPartner = -1;
+    TradeEvo evo;
+    TradeEvo evoPartnerEvo;
     bool detail = false;                  // Liste: Detailansicht des gewählten Pokémon
     std::vector<std::pair<std::string, std::string>> detailRows; // Spiel, Ergebnis
     int listFilter = 0;                   // Liste: Filter (siehe FILTERS)
@@ -766,7 +771,7 @@ void drawList(const State& st) {
         text(placeName(st, g.pos[size_t(i)]), 54, y + 19, 0.38f, m, LEFT, 220);
         text(mk ? std::string("wird entlassen") : "OT " + e.pk.otName(), 386, y + 19, 0.38f, mk ? C_ERR : m, RIGHT, 110);
     }
-    if (st.marked.empty()) text("A: zum Entlassen markieren   X: Details   B: zurück", 392, 226, 0.36f, C_LIGHT, RIGHT);
+    if (st.marked.empty()) text("A: markieren (entlassen)  X: Details  R: Entwickeln  B: zurück", 392, 226, 0.34f, C_LIGHT, RIGHT, 384);
     else text("A: markieren   SELECT: " + std::to_string(st.marked.size()) + " markierte entlassen   B: zurück", 392, 226, 0.36f, C_ERR, RIGHT, 384);
 }
 
@@ -1085,6 +1090,26 @@ void drawBottom(const State& st) {
             button(B_YES2, "Ja, zurück (Y)", C_ERR, C_WHITE, 0.5f);
             button(B_NO2, "Abbrechen (B)", C_BG2, C_WHITE, 0.5f);
         }
+        break;
+    }
+    case Screen::Evolve: {
+        text("Entwickeln", 160, 4, 0.6f, C_WHITE, CENTER);
+        const BankEntry& e = entryAt(st, st.evoPos);
+        drawIcon(e.pk, 60, 36, 1.0f, false);
+        text(monName(e.pk) + "  Lv. " + std::to_string(levelOf(e.pk)), 110, 44, 0.5f, C_WHITE, LEFT, 200);
+        text("entwickelt sich zu " + g_names.species(st.evo.target), 160, 82, 0.5f, C_WHITE, CENTER, 300);
+        float y = 104;
+        if (st.evo.method == 6) { text(g_names.item(st.evo.param) + " wird dabei verbraucht.", 160, y, 0.42f, C_LIGHT, CENTER, 300); y += 18; }
+        if (st.evoPartner >= 0) {
+            const BankEntry& p = entryAt(st, st.evoPartner);
+            text("Tauschpartner: " + monName(p.pk) + " Lv. " + std::to_string(levelOf(p.pk)), 160, y, 0.42f, C_LIGHT, CENTER, 300);
+            text("entwickelt sich dabei zu " + g_names.species(st.evoPartnerEvo.target), 160, y + 16, 0.42f, C_LIGHT, CENTER, 300);
+            y += 34;
+        }
+        text("Wie ein Tausch im Spiel. Gespeichert wird beim Speichern,", 160, 150, 0.36f, C_LIGHT, CENTER, 304);
+        text("Spielen oder Beenden.", 160, 164, 0.36f, C_LIGHT, CENTER, 304);
+        button(B_YES, "Entwickeln (A)", C_OK, C_WHITE, 0.5f);
+        button(B_NO, "Abbrechen (B)", C_BG2, C_WHITE, 0.5f);
         break;
     }
     case Screen::Update: {
@@ -1444,6 +1469,68 @@ void openJournal(State& st) {
     st.view = View::Journal;
 }
 
+// Tauschentwicklung vorbereiten (R in einer geöffneten Art)
+void openEvolve(State& st) {
+    int pos = st.list[size_t(st.listOpen)].pos[size_t(st.entrySel)];
+    const BankEntry& e = entryAt(st, pos);
+    auto fail = [&](const std::string& m) { st.message = m; st.screen = Screen::Error; };
+    if (g_species.tradeEvos().empty()) return fail("Entwickeln nicht möglich\narten.bin ist zu alt. Bitte mit dem Daten-Werkzeug\n(monster-reise-daten.html) neu erzeugen und kopieren.");
+    if (e.away()) return fail("Entwickeln nicht möglich\n" + monName(e.pk) + " fehlt gerade in " + awayLabel(st, e) + ".");
+    if (e.pk.heldItem() == ITEM_EVERSTONE) return fail("Entwickeln nicht möglich\n" + monName(e.pk) + " trägt einen Ewigstein.");
+    std::vector<TradeEvo> opts = tradeOptions(e.pk, g_species);
+    if (opts.empty()) {
+        // Braucht es ein Item?
+        for (const TradeEvo& t : g_species.tradeEvos())
+            if (t.species == e.pk.species() && t.method == 6)
+                return fail("Noch nicht\n" + monName(e.pk) + " entwickelt sich durch Tausch,\nwenn es " + g_names.item(t.param) + " trägt.");
+        return fail("Keine Tauschentwicklung\n" + monName(e.pk) + " entwickelt sich nicht durch Tausch.");
+    }
+    st.evoPos = pos;
+    st.evo = opts[0];
+    st.evoPartner = -1;
+    if (st.evo.method == 7) { // Laukaps <-> Schnuthelm: nur gemeinsam
+        uint16_t want = e.pk.species() == 588 ? 616 : 588;
+        int best = -1;
+        const int total = Bank::PARTY + Bank::BOXES * Bank::SLOTS;
+        for (int p = 0; p < total; p++) {
+            const BankEntry& o = entryAt(st, p);
+            if (!o.used || o.away() || o.pk.isEgg() || o.pk.species() != want || o.pk.heldItem() == ITEM_EVERSTONE) continue;
+            if (best < 0 || levelOf(o.pk) > levelOf(entryAt(st, best).pk)) best = p;
+        }
+        if (best < 0) return fail("Kein Tauschpartner\n" + monName(e.pk) + " entwickelt sich nur im Tausch\ngegen ein " + g_names.species(want) + ".");
+        std::vector<TradeEvo> po = tradeOptions(entryAt(st, best).pk, g_species);
+        if (po.empty()) return fail("Kein Tauschpartner\n" + g_names.species(want) + " kann sich nicht entwickeln.");
+        st.evoPartner = best;
+        st.evoPartnerEvo = po[0];
+    }
+    st.screen = Screen::Evolve;
+}
+
+void doEvolve(State& st) {
+    std::vector<std::pair<int, TradeEvo>> todo = {{st.evoPos, st.evo}};
+    if (st.evoPartner >= 0) todo.push_back({st.evoPartner, st.evoPartnerEvo});
+    std::vector<std::string> lines;
+    for (auto& [pos, ev] : todo) {
+        BankEntry& e = entryAt(st, pos);
+        std::string before = monName(e.pk);
+        applyTradeEvolution(e.pk, ev, g_species, g_names);
+        if (pos < Bank::PARTY) refreshParty7(e.pk, g_species); // Teamwerte der neuen Art
+        lines.push_back(before + " hat sich zu " + g_names.species(ev.target) + " entwickelt");
+    }
+    journalAdd(lines);
+    st.dirty = true;
+    u16 sp = st.list[size_t(st.listOpen)].species;
+    buildList(st);
+    st.listOpen = -1; // Gruppe kann weggefallen sein
+    for (size_t i = 0; i < st.list.size(); i++)
+        if (st.list[i].species == sp) { st.listOpen = int(i); st.listSel = int(i); }
+    if (st.listOpen >= 0) st.entrySel = std::min(st.entrySel, int(st.list[size_t(st.listOpen)].pos.size()) - 1);
+    st.notice = lines;
+    st.notice.push_back("Gespeichert wird beim Speichern, Spielen oder Beenden.");
+    st.infoScroll = 0;
+    st.screen = Screen::Info;
+}
+
 void openList(State& st) {
     st.detail = false;
     st.held = -1;
@@ -1535,6 +1622,7 @@ void listInput(State& st, u32 down) {
     if (st.detail) { if (down & (KEY_A | KEY_B | KEY_X)) st.detail = false; return; }
     int n = int(st.list[size_t(st.listOpen)].pos.size());
     if (down & KEY_X) { openDetail(st); return; }
+    if (down & KEY_R) { openEvolve(st); return; }
     if (down & KEY_DDOWN) st.entrySel = std::min(n - 1, st.entrySel + 1);
     if (down & KEY_DUP) st.entrySel = std::max(0, st.entrySel - 1);
     if (down & KEY_B) st.listOpen = -1;
@@ -1648,6 +1736,10 @@ void input(State& st, u32 down, const touchPosition& t) {
             else if ((touch && B_NO2.hit(t)) || (down & KEY_B)) st.bkStep = 0;
         }
         break;
+    case Screen::Evolve:
+        if ((touch && B_YES.hit(t)) || (down & KEY_A)) doEvolve(st);
+        else if ((touch && B_NO.hit(t)) || (down & KEY_B)) st.screen = Screen::Menu;
+        break;
     case Screen::Update:
         if (st.updDone) { if ((touch && B_BACK.hit(t)) || (down & (KEY_A | KEY_B))) st.quit = true; }
         else if (updater::isNewer(st.updVersion, APP_VERSION)) {
@@ -1675,7 +1767,7 @@ void input(State& st, u32 down, const touchPosition& t) {
             if (!st.marked.empty()) { st.releaseStep = 0; st.screen = Screen::Release; }
             else if (st.listOpen < 0) st.screen = Screen::Dupes;
         } else if (st.view == View::List && st.listOpen < 0 && !st.marked.empty() && (down & KEY_X)) st.marked.clear();
-        else if (st.view == View::List && ((down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT)) || (st.listOpen >= 0 && (down & KEY_X)))) listInput(st, down);
+        else if (st.view == View::List && ((down & (KEY_A | KEY_B | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT)) || (st.listOpen >= 0 && (down & (KEY_X | KEY_R))))) listInput(st, down);
         else if ((st.view == View::Team || st.view == View::PC) && (down & KEY_A)) pickOrDrop(st);
         else if (down & KEY_B) st.held = -1;
         else if ((touch && B_TRAVEL.hit(t)) || (down & KEY_X)) { st.held = -1; startTravel(st); }

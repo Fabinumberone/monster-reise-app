@@ -128,11 +128,12 @@ Privates Mod- und Homebrew-Projekt, damit man mit **einem durchgehenden Spielsta
 4. ~~Suche/Filter~~ **erledigt**: L = Filter (Alle, Schillernd, Nicht schillernd, Hier nicht sichtbar, Fehlt, Eier), R = Tastatur (Name oder Zahl = Mindestlevel).
 5. ~~Detailansicht~~ **erledigt**: X in geöffneter Art; whyNotIn/whyNotGB/whyNotGen3/whyNotGen45 (fits* rufen diese auf), plus „Boxen voll“ über die Position unter den passenden Box-Pokémon.
 6. ~~Pokédex-Übersicht~~ **erledigt** (Y nach der Liste): Arten je Generation, fehlende Arten; Fangorte noch offen.
-7. „Reisen“ im Spiel (3GX/Code-Patch), z. B. Eintrag am PC im Pokémon-Center.
+7. ~~„Reisen“ im Spiel~~ verworfen (Nutzer 2026-11-08): 3GX-Plugins wirken nur in 3DS-Spielen, nicht in mGBA/DS/VC; wäre nur eine Abkürzung zur App.
 8. ~~Reisetagebuch~~ **erledigt** (Y nach dem Pokédex): sdmc:/pokemon-world-3d/tagebuch.txt, höchstens 2000 Zeilen.
 9. Trainerpass über alle Regionen (Orden, Spielzeit, Arten; nur lesend).
 10. Reise-Optik: eigene Weltkarte, Übergang „Fähre nach …“, Bordkarte (nur eigene Grafik).
-11. **Tauschentwicklung in der App** (statt „Tausch mit sich selbst“): Option „Entwickeln“ für Pokémon, die sich durch Tausch entwickeln (mit/ohne Item, Item wird verbraucht; Laukaps/Schnuthelm nur gemeinsam), Entwicklungsdaten aus dem eigenen UM-Dump (a/0/1/4) in arten.bin.
+11. ~~Tauschentwicklung~~ **erledigt (0.6.0)**: R in geöffneter Art; arten.bin Version 3 mit Abschnitt „TRDE“ (26 Einträge aus a/0/1/4: 5 Tausch, 6 mit Item, 7 Laukaps/Schnuthelm gemeinsam, Partner = höchstes Level), core/evolve.* (Art, Fähigkeit nach Platz, Name ohne Spitzname DE/EN, Item verbraucht, Ewigstein verhindert), Teamwerte neu. Ältere App-Versionen lesen arten.bin v3 weiter. PC: test-entwickeln <speicher>.
+   (alt) 11. **Tauschentwicklung in der App** (statt „Tausch mit sich selbst“): Option „Entwickeln“ für Pokémon, die sich durch Tausch entwickeln (mit/ohne Item, Item wird verbraucht; Laukaps/Schnuthelm nur gemeinsam), Entwicklungsdaten aus dem eigenen UM-Dump (a/0/1/4) in arten.bin.
 
 1. Echte Spielstände von Omega Rubin und X aus Azahar holen (nach `saves/`, ignoriert), `info`/`scan` laufen lassen, Offsets bestätigen bzw. korrigieren.
 2. Geld, Bag und Spielzeit bestätigen; Übertragung ORAS ↔ XY inkl. Trainer-ID; Rundlauf testen (übertragen, im Spiel laden, speichern, zurück).
