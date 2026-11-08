@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <cstdio>
+#include <cmath>
 #include <ctime>
 #include <memory>
 #include <string>
@@ -30,6 +31,7 @@
 #include "icons.hpp"
 #include "updater.hpp"
 #include "evolve.hpp"
+#include "worldmap.hpp"
 #include "species.hpp"
 #include "items.hpp"
 #include "names.hpp"
@@ -50,6 +52,7 @@ const char* BACKUPS = "sdmc:/pokemon-world-3d/sicherungen";
 const char* NAMES = "sdmc:/pokemon-world-3d/namen.txt";
 const char* ICONS = "sdmc:/pokemon-world-3d/icons.bin";
 const char* SPECIES = "sdmc:/pokemon-world-3d/arten.bin";
+const char* MAPFILE = "sdmc:/pokemon-world-3d/weltkarte.bin";
 const char* SETTINGS = "sdmc:/pokemon-world-3d/einstellungen.txt"; // „kurzname=…“
 std::string readShortName();
 
@@ -84,6 +87,7 @@ u32 regionColor(const char* region) {
 C2D_TextBuf g_buf;
 Names g_names;
 IconSet g_icons;
+WorldMap g_map; // Weltkarte (optional, nur wenn weltkarte.bin auf der SD liegt)
 SpeciesData g_species;
 
 enum Align { LEFT = C2D_AlignLeft, CENTER = C2D_AlignCenter, RIGHT = C2D_AlignRight };
@@ -167,6 +171,12 @@ struct State {
     struct PassRow { std::string game, region, name; int minutes = -1, badges = -1, badgeMax = 0; };
     std::vector<PassRow> pass;            // Trainerpass: je Spielstand
     int passScroll = 0;
+    // Weltkarte: Kamera (Mittelpunkt in Kartenpixeln, Maßstab), Flug von camFrom nach camTo
+    struct Cam { float x = 0, y = 0, s = 0; };
+    mutable Cam camFrom, camTo;
+    mutable u64 camStart = 0;
+    mutable int camDur = 700;
+    std::string flightText;               // während des Flugs zur Zielregion
     // Tauschentwicklung: Pokémon, gewählte Möglichkeit, Partner (Laukaps/Schnuthelm, sonst -1)
     int evoPos = -1, evoPartner = -1;
     TradeEvo evo;
@@ -381,6 +391,7 @@ void loadState(State& st) {
     g_names.load(NAMES);
     g_species.load(SPECIES);
     g_icons.load(ICONS);
+    g_map.load(MAPFILE);
     st.installed = findSaves();
     logLine(cartInfo());
     st.current = nullptr;
@@ -856,7 +867,10 @@ void drawPass(const State& st) {
     text("Steuerkreuz: blättern   Y: weiter", 392, 226, 0.36f, C_LIGHT, RIGHT);
 }
 
+bool drawMapTop(const State& st);
+
 void drawTop(const State& st) {
+    if (drawMapTop(st)) return;
     drawHeader(st);
     if (st.loading) {
         text(st.updStartup ? "Suche nach Updates …" : "Lese Spielstände …", 200, 110, 0.6f, C_LIGHT, CENTER);
@@ -1222,6 +1236,130 @@ void drawBottom(const State& st) {
 
 C3D_RenderTarget *g_top, *g_bot;
 
+// ---------- Weltkarte (Reise-Optik, Wunsch des Nutzers: ganze Karte, dann in die Region hineinfliegen) ----------
+// Lage der Regionen auf der Weltkarte des Nutzers (Anteil von Breite/Höhe: Mitte und Breite des Ausschnitts).
+struct MapRegion { const char* name; float x, y, w; };
+const MapRegion MAP_REGIONS[NREG] = {
+    {"Kanto", 0.655f, 0.445f, 0.15f}, {"Johto", 0.565f, 0.455f, 0.12f}, {"Hoenn", 0.548f, 0.575f, 0.13f},
+    {"Sinnoh", 0.555f, 0.235f, 0.13f}, {"Einall", 0.39f, 0.60f, 0.17f}, {"Kalos", 0.39f, 0.31f, 0.17f},
+    {"Alola", 0.835f, 0.44f, 0.25f}, // ganze Inselgruppe (Nutzer: nicht nur eine Insel)
+};
+int regionIndex(const std::string& name) {
+    for (int r = 0; r < NREG; r++) if (name == REGIONS[r]) return r;
+    return -1;
+}
+State::Cam camOverview() {
+    float s = std::max(400.0f / float(g_map.width()), 240.0f / float(g_map.height()));
+    return {g_map.width() / 2.0f, g_map.height() / 2.0f, s};
+}
+State::Cam camRegion(int r) {
+    if (r < 0) return camOverview();
+    const MapRegion& m = MAP_REGIONS[r];
+    float s = 400.0f / (m.w * float(g_map.width()) * 1.25f);
+    return {m.x * g_map.width(), m.y * g_map.height(), std::max(s, camOverview().s)};
+}
+// Aktuelle Kamera (sanfter Übergang, Zoom im logarithmischen Maßstab)
+State::Cam camNow(const State& st) {
+    float t = st.camStart ? float(osGetTime() - st.camStart) / float(st.camDur) : 1.0f;
+    t = std::min(1.0f, std::max(0.0f, t));
+    float e = t * t * (3 - 2 * t);
+    const State::Cam &a = st.camFrom, &b = st.camTo;
+    // beim Flug zwischen zwei Regionen erst etwas heraus-, dann hineinzoomen
+    float ls = std::log(a.s) + (std::log(b.s) - std::log(a.s)) * e;
+    if (st.camDur > 1000) ls -= 0.9f * std::sin(3.14159f * e);
+    State::Cam c{a.x + (b.x - a.x) * e, a.y + (b.y - a.y) * e, std::exp(ls)};
+    // nicht über den Kartenrand hinaus
+    float hw = 200.0f / c.s, hh = 120.0f / c.s;
+    c.x = std::min(std::max(c.x, hw), std::max(hw, g_map.width() - hw));
+    c.y = std::min(std::max(c.y, hh), std::max(hh, g_map.height() - hh));
+    return c;
+}
+void camGo(const State& st, const State::Cam& to, int ms) {
+    if (std::fabs(to.x - st.camTo.x) < 0.5f && std::fabs(to.y - st.camTo.y) < 0.5f && std::fabs(to.s - st.camTo.s) < 0.0001f && st.camDur == ms) return;
+    st.camFrom = st.camStart ? camNow(st) : to;
+    st.camTo = to;
+    st.camStart = osGetTime();
+    st.camDur = ms;
+}
+
+// Text mit Schatten auf der Karte
+void mapText(const std::string& s, float x, float y, float size, u32 color, Align a = LEFT) {
+    text(s, x + 1, y + 1, size, C2D_Color32(0, 0, 0, 0xB0), a);
+    text(s, x, y, size, color, a);
+}
+
+bool drawMapTop(const State& st) {
+    if (!g_map.loaded() || !st.bankOk) return false;
+    bool flying = st.screen == Screen::Busy && !st.flightText.empty();
+    if (st.screen != Screen::Travel && st.screen != Screen::Confirm && !flying) return false;
+    if (!flying) camGo(st, st.screen == Screen::Confirm ? camRegion(regionIndex(st.target->game->region))
+                                                         : camRegion(st.travelRegion), 700);
+    State::Cam c = camNow(st);
+    g_map.draw(c.x, c.y, c.s);
+    // Regionen markieren (je weiter herausgezoomt, desto mehr Namen)
+    for (int r = 0; r < NREG; r++) {
+        int n = int(gamesIn(st, r).size());
+        float x = (MAP_REGIONS[r].x * g_map.width() - c.x) * c.s + 200, y = (MAP_REGIONS[r].y * g_map.height() - c.y) * c.s + 120;
+        if (x < -40 || x > 440 || y < -20 || y > 260) continue;
+        bool sel = st.screen == Screen::Travel && st.travelRegion == r;
+        u32 col = n ? regionColor(REGIONS[r]) : C2D_Color32(0x80, 0x80, 0x80, 0xFF);
+        C2D_DrawCircleSolid(x, y, 0, sel ? 7 : 5, C_WHITE);
+        C2D_DrawCircleSolid(x, y, 0, sel ? 5 : 3.5f, col);
+        if (c.s < 0.35f || sel) mapText(REGIONS[r], x, y + 6, sel ? 0.55f : 0.42f, n ? C_WHITE : C_LIGHT, CENTER);
+    }
+    // Kopfzeile schlicht
+    rect(0, 0, 400, 22, C2D_Color32(0x10, 0x18, 0x24, 0xC0));
+    if (flying) {
+        mapText(st.flightText, 200, 3, 0.5f, C_WHITE, CENTER);
+    } else if (st.screen == Screen::Travel) {
+        mapText(st.travelRegion < 0 ? "Weltkarte – wohin geht die Reise?" : std::string(REGIONS[st.travelRegion]), 200, 3, 0.5f, C_WHITE, CENTER);
+    } else {
+        // Bordkarte
+        const Game& tg = *st.target->game;
+        std::string from = st.current ? std::string(st.current->game->region) + " (" + gameTitle(*st.current->game) + ")" : "–";
+        char date[32];
+        std::time_t now = std::time(nullptr);
+        std::strftime(date, sizeof date, "%d.%m.%Y %H:%M", std::localtime(&now));
+        float x0 = 40, y0 = 130, w = 320, h = 96;
+        rect(x0 + 3, y0 + 3, w, h, C2D_Color32(0, 0, 0, 0x60));
+        rect(x0, y0, w, h, C_CARD);
+        rect(x0, y0, w, 18, regionColor(tg.region));
+        text("BORDKARTE", x0 + 8, y0 + 2, 0.45f, C_WHITE);
+        text("Monster Reise", x0 + w - 8, y0 + 3, 0.38f, C_WHITE, RIGHT);
+        for (int i = 0; i < 6; i++) rect(x0 + 226, y0 + 22 + i * 12, 1, 7, C_MUTED); // Abrisslinie
+        text("VON", x0 + 8, y0 + 24, 0.32f, C_MUTED);
+        text(from, x0 + 8, y0 + 34, 0.4f, C_TEXT, LEFT, 210);
+        text("NACH", x0 + 8, y0 + 52, 0.32f, C_MUTED);
+        text(std::string(tg.region) + " (" + gameTitle(tg) + (st.target->cart() ? ", Modul" : "") + ")", x0 + 8, y0 + 62, 0.45f, C_TEXT, LEFT, 210);
+        text("PASSAGIER", x0 + 8, y0 + 80, 0.3f, C_MUTED);
+        text(tg.gen >= 6 ? st.bank.trainer.name : shortTrainerName(st.bank.trainer.name), x0 + 70, y0 + 79, 0.38f, C_TEXT, LEFT, 150);
+        text("DATUM", x0 + 236, y0 + 24, 0.32f, C_MUTED);
+        text(std::string(date).substr(0, 10), x0 + 236, y0 + 34, 0.38f, C_TEXT);
+        text(std::string(date).substr(11), x0 + 236, y0 + 48, 0.38f, C_TEXT);
+        text("TEAM", x0 + 236, y0 + 64, 0.32f, C_MUTED);
+        int team = 0;
+        for (auto& e : st.bank.party) team += e.used;
+        text(std::to_string(team) + " Pokémon", x0 + 236, y0 + 74, 0.38f, C_TEXT);
+    }
+    return true;
+}
+
+// Flug zur Zielregion vor dem Start (nur mit Weltkarte)
+void flyTo(State& st) {
+    if (!g_map.loaded()) return;
+    int to = regionIndex(st.target->game->region);
+    int from = st.current ? regionIndex(st.current->game->region) : -1;
+    st.camFrom = from >= 0 ? camRegion(from) : camOverview();
+    st.camTo = camRegion(to);
+    st.camDur = from == to ? 900 : 2200;
+    st.camStart = osGetTime();
+    st.flightText = "Reise nach " + std::string(st.target->game->region) + " …";
+    st.screen = Screen::Busy;
+    st.message = st.flightText;
+    while (aptMainLoop() && osGetTime() - st.camStart < u64(st.camDur) + 300) render(st);
+    st.flightText.clear();
+}
+
 void render(const State& st) {
     C2D_TextBufClear(g_buf);
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
@@ -1259,6 +1397,7 @@ void doLaunch(State& st) {
         commit(st, false);
     }
     writeLast(st.target->game->lowId);
+    flyTo(st);
     if (launchGame(*st.target)) {
         st.quit = true;
         return;

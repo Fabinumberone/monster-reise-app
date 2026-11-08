@@ -14,6 +14,7 @@ const parts = [
   'tools/lib/gftext.mjs',
   'tools/lib/pica.mjs',
   'tools/lib/monsterdaten.mjs',
+  'tools/lib/weltkarte.mjs',
   'tools/web/kern.js',
 ].map(f => `// ---- ${f}\n` + strip(fs.readFileSync(path.join(root, f), 'utf8')));
 const libs = '//KERN-START\n' + parts.join('\n') + '\n//KERN-END';

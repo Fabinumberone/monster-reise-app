@@ -41,6 +41,7 @@ code { font: .9em ui-monospace, Menlo, Consolas, monospace; background: color-mi
       <li><b>Ultrasonne oder Ultramond</b> als entschlüsselte <code>.cia</code> oder <code>.3ds</code> (Pflicht)</li>
       <li>für Gen 1/2: Rot, Blau oder Gelb und Gold, Silber oder Kristall aus der Virtual Console, ebenfalls als entschlüsselte <code>.cia</code></li>
       <li>oder statt der Dateien: den SD-Ordner von Azahar (<code>sdmc</code>), dort liegen installierte Spiele schon entschlüsselt</li>
+      <li>optional: ein eigenes Weltkarten-Bild (<code>.jpg</code> oder <code>.png</code>) für die Reise-Ansicht der App</li>
     </ul>
   </div>
 
@@ -104,7 +105,7 @@ async function run(files) {
 
 // Ordner beim Ziehen rekursiv einsammeln
 async function collect(entry, out) {
-  if (entry.isFile) { if (/\.(cia|3ds|cci|cxi|app)$/i.test(entry.name)) out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
+  if (entry.isFile) { if (/\.(cia|3ds|cci|cxi|app|jpe?g|png)$/i.test(entry.name)) out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
   const reader = entry.createReader();
   for (;;) {
     const batch = await new Promise((res, rej) => reader.readEntries(res, rej));

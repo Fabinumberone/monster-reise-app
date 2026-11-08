@@ -106,8 +106,26 @@ const USUM_FILES = ['a/0/3/5', 'a/0/3/2', 'a/0/1/7', 'a/0/1/4', 'a/0/6/2', '.cod
 const EXT = /\.(cia|3ds|cci|cxi|app)$/i;
 
 /** files: File-Objekte; liefert die ZIP-Datei (Uint8Array) oder wirft mit verständlicher Meldung. */
+// Kartenbild (eigene Datei) auf 2048 × 1280 bringen (volle Breite, mittig zugeschnitten) und umwandeln
+async function mapFromImage(file) {
+  const bmp = await createImageBitmap(file);
+  const c = document.createElement('canvas');
+  c.width = MAP_W; c.height = MAP_H;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  const h = MAP_W * bmp.height / bmp.width;
+  ctx.drawImage(bmp, 0, (MAP_H - h) / 2, MAP_W, h);
+  return encodeMap(ctx.getImageData(0, 0, MAP_W, MAP_H).data);
+}
+
 async function erzeugeDaten(files, log) {
   let usum = null;
+  let karte = null;
+  const bild = files.find(f => /\.(jpe?g|png)$/i.test(f.name));
+  if (bild) {
+    log(`${bild.name}: Weltkarte wird umgewandelt …`);
+    karte = await mapFromImage(bild);
+  }
   const roms = [];
   let encrypted = 0;
   for (const f of files.filter(f => EXT.test(f.name))) {
@@ -135,6 +153,10 @@ async function erzeugeDaten(files, log) {
       }
     }
   }
+  if (!usum && karte) {
+    log('Kein Ultrasonne/Ultramond dabei: nur die Weltkarte.');
+    return { zip: makeZip([{ name: 'pokemon-world-3d/', data: Buffer.alloc(0) }, { name: 'pokemon-world-3d/weltkarte.bin', data: karte }]), gen1: true, gen2: true };
+  }
   if (!usum) {
     throw new Error('Ultrasonne oder Ultramond nicht gefunden.' + (encrypted ? ` ${encrypted} Datei(en) sind verschlüsselt und müssen erst entschlüsselt werden (siehe Anleitung).` : ''));
   }
@@ -150,6 +172,7 @@ async function erzeugeDaten(files, log) {
     { name: 'pokemon-world-3d/arten.bin', data: arten.data },
     { name: 'pokemon-world-3d/namen.txt', data: namen },
     { name: 'pokemon-world-3d/icons.bin', data: icons },
+    ...(karte ? [{ name: 'pokemon-world-3d/weltkarte.bin', data: karte }] : []),
   ]);
   return { zip, gen1: arten.gen1, gen2: arten.gen2 };
 }
